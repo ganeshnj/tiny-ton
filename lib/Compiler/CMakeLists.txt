@@ -1,0 +1,10 @@
+add_library(TinyTonCompiler
+  Pipeline.cpp
+  RegisterAlloc.cpp
+  CodeGen.cpp
+)
+target_link_libraries(TinyTonCompiler
+  PUBLIC
+  TinyTonIR
+  TinyTonDialect
+)

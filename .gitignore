@@ -1,0 +1,35 @@
+# Build
+build/
+cmake-build-*/
+
+# Compiled objects
+*.o
+*.so
+*.dylib
+*.a
+*.lib
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+*.egg
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# MLIR/LLVM generated
+*.inc
+
+# Test artifacts
+Testing/
+.history

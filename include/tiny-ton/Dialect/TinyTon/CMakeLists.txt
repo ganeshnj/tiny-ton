@@ -1,0 +1,6 @@
+set(LLVM_TARGET_DEFINITIONS TinyTonOps.td)
+mlir_tablegen(TinyTonOps.h.inc -gen-op-decls)
+mlir_tablegen(TinyTonOps.cpp.inc -gen-op-defs)
+mlir_tablegen(TinyTonDialect.h.inc -gen-dialect-decls)
+mlir_tablegen(TinyTonDialect.cpp.inc -gen-dialect-defs)
+add_public_tablegen_target(TinyTonOpsIncGen)

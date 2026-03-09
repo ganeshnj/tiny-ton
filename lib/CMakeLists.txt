@@ -1,0 +1,4 @@
+add_subdirectory(Dialect/TinyTon)
+add_subdirectory(IR)
+add_subdirectory(Compiler)
+add_subdirectory(Runtime)

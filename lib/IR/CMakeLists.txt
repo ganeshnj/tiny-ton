@@ -1,0 +1,7 @@
+add_library(TinyTonIR
+  Builder.cpp
+)
+target_link_libraries(TinyTonIR
+  PUBLIC
+  TinyTonDialect
+)

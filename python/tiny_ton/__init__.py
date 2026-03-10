@@ -1,16 +1,8 @@
 """tiny-ton: A Triton-inspired GPU kernel compiler."""
 
 from tiny_ton.jit import jit
-from tiny_ton._buffer import Buffer
 
 __version__ = "0.1.0"
-
-_BACKEND_AVAILABLE = False
-try:
-    import _tiny_ton_core  # noqa: F401
-    _BACKEND_AVAILABLE = True
-except ImportError:
-    pass
 
 
 def program_id(axis: int = 0):
@@ -35,7 +27,6 @@ def store(ptr, val, mask=None):
 
 __all__ = [
     "jit",
-    "Buffer",
     "program_id",
     "arange",
     "load",

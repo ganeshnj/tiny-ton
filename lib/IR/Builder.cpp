@@ -1,80 +1,116 @@
 #include "tiny-ton/IR/Builder.h"
+#include "tiny-ton/Dialect/TinyTon/TinyTonDialect.h"
+#include "tiny-ton/Dialect/TinyTon/TinyTonOps.h"
+
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/MLIRContext.h"
 
 namespace tinyton {
 
-struct Value {
-  int id;
-  std::string name;
-};
-
-struct Function {
-  std::string name;
-  std::vector<Value *> args;
-};
-
 struct IRBuilder::Impl {
-  std::unique_ptr<Function> func;
-  int nextId = 0;
+  mlir::MLIRContext context;
+  mlir::ModuleOp module;
+  std::unique_ptr<mlir::OpBuilder> builder;
+  mlir::Block *block = nullptr;
+
+  Impl() {
+    context.getOrLoadDialect<tinyton::TinyTonDialect>();
+    module = mlir::ModuleOp::create(mlir::UnknownLoc::get(&context));
+    builder = std::make_unique<mlir::OpBuilder>(&context);
+  }
 };
 
 IRBuilder::IRBuilder() : impl_(std::make_unique<Impl>()) {}
 IRBuilder::~IRBuilder() = default;
 
-void IRBuilder::beginFunction(const std::string &name, int numArgs) {
-  // TODO: implement
+void IRBuilder::beginFunction(const std::string &name) {
+  impl_->block = impl_->module.getBody();
+  impl_->builder->setInsertionPointToEnd(impl_->block);
 }
 
-Value *IRBuilder::getArg(int index) {
-  // TODO: implement
-  return nullptr;
+mlir::Value IRBuilder::emitConst(int64_t val) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto i32Ty = impl_->builder->getI32Type();
+  auto attr = impl_->builder->getI32IntegerAttr(val);
+  return impl_->builder->create<tinyton::ConstOp>(loc, i32Ty, attr)
+      .getResult();
 }
 
-Value *IRBuilder::emitConst(int64_t val) {
-  // TODO: implement
-  return nullptr;
+mlir::Value IRBuilder::emitArg(int64_t index) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto i32Ty = impl_->builder->getI32Type();
+  auto attr = impl_->builder->getI32IntegerAttr(index);
+  return impl_->builder->create<tinyton::ArgOp>(loc, i32Ty, attr).getResult();
 }
 
-Value *IRBuilder::emitAdd(Value *lhs, Value *rhs) {
-  // TODO: implement
-  return nullptr;
+mlir::Value IRBuilder::emitProgramId(int64_t axis) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto i32Ty = impl_->builder->getI32Type();
+  auto attr = impl_->builder->getI32IntegerAttr(axis);
+  return impl_->builder->create<tinyton::ProgramIdOp>(loc, i32Ty, attr)
+      .getResult();
 }
 
-Value *IRBuilder::emitSub(Value *lhs, Value *rhs) {
-  // TODO: implement
-  return nullptr;
+mlir::Value IRBuilder::emitThreadId(int64_t axis) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto i32Ty = impl_->builder->getI32Type();
+  auto attr = impl_->builder->getI32IntegerAttr(axis);
+  return impl_->builder->create<tinyton::ThreadIdOp>(loc, i32Ty, attr)
+      .getResult();
 }
 
-Value *IRBuilder::emitMul(Value *lhs, Value *rhs) {
-  // TODO: implement
-  return nullptr;
+mlir::Value IRBuilder::emitAdd(mlir::Value lhs, mlir::Value rhs) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto i32Ty = impl_->builder->getI32Type();
+  return impl_->builder->create<tinyton::AddOp>(loc, i32Ty, lhs, rhs)
+      .getResult();
 }
 
-Value *IRBuilder::emitDiv(Value *lhs, Value *rhs) {
-  // TODO: implement
-  return nullptr;
+mlir::Value IRBuilder::emitSub(mlir::Value lhs, mlir::Value rhs) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto i32Ty = impl_->builder->getI32Type();
+  return impl_->builder->create<tinyton::SubOp>(loc, i32Ty, lhs, rhs)
+      .getResult();
 }
 
-Value *IRBuilder::emitLoad(Value *addr) {
-  // TODO: implement
-  return nullptr;
+mlir::Value IRBuilder::emitMul(mlir::Value lhs, mlir::Value rhs) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto i32Ty = impl_->builder->getI32Type();
+  return impl_->builder->create<tinyton::MulOp>(loc, i32Ty, lhs, rhs)
+      .getResult();
 }
 
-void IRBuilder::emitStore(Value *addr, Value *val) {
-  // TODO: implement
+mlir::Value IRBuilder::emitCmpLt(mlir::Value lhs, mlir::Value rhs) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto i32Ty = impl_->builder->getI32Type();
+  return impl_->builder->create<tinyton::CmpLtOp>(loc, i32Ty, lhs, rhs)
+      .getResult();
 }
 
-Value *IRBuilder::emitProgramId(int axis) {
-  // TODO: implement
-  return nullptr;
+mlir::Value IRBuilder::emitLoad(mlir::Value addr, mlir::Value mask) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto i32Ty = impl_->builder->getI32Type();
+  return impl_->builder->create<tinyton::LoadOp>(loc, i32Ty, addr, mask)
+      .getResult();
+}
+
+void IRBuilder::emitStore(mlir::Value addr, mlir::Value val, mlir::Value mask) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  impl_->builder->create<tinyton::StoreOp>(loc, addr, val, mask);
+}
+
+void IRBuilder::emitBranchZero(mlir::Value cond, int64_t skip) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto attr = impl_->builder->getI32IntegerAttr(skip);
+  impl_->builder->create<tinyton::BranchZeroOp>(loc, cond, attr);
 }
 
 void IRBuilder::emitRet() {
-  // TODO: implement
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  impl_->builder->create<tinyton::RetOp>(loc);
 }
 
-std::unique_ptr<Function> IRBuilder::build() {
-  // TODO: implement
-  return std::move(impl_->func);
-}
+mlir::ModuleOp IRBuilder::getModule() { return impl_->module; }
 
 } // namespace tinyton

@@ -4,4 +4,6 @@ add_library(TinyTonIR
 target_link_libraries(TinyTonIR
   PUBLIC
   TinyTonDialect
+  MLIRIR
+  MLIRSupport
 )

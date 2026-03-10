@@ -1,11 +1,135 @@
-"""JIT decorator and Python AST → C++ IR bridge."""
+"""JIT decorator and Python AST -> C++ IR bridge."""
 
 from __future__ import annotations
 
 import ast
 import inspect
 import textwrap
-from typing import Any
+from typing import Any, Optional
+
+import numpy as np
+
+
+_BUILTINS = {"program_id", "arange", "load", "store"}
+
+# Module aliases that should be treated as the tiny_ton namespace.
+_MODULE_ALIASES = {"tt", "tiny_ton"}
+
+
+class KernelVisitor(ast.NodeVisitor):
+    """Walks a Python AST and emits TinyTon IR via the C++ IRBuilder."""
+
+    def __init__(self, builder, param_names: list[str]):
+        self.builder = builder
+        self.symbols: dict[str, Any] = {}
+        self.block_size: Optional[int] = None
+
+        for i, name in enumerate(param_names):
+            self.symbols[name] = builder.emit_arg(i)
+
+    # ------------------------------------------------------------------
+    # Statements
+    # ------------------------------------------------------------------
+
+    def visit_FunctionDef(self, node: ast.FunctionDef):
+        for stmt in node.body:
+            self.visit(stmt)
+        self.builder.emit_ret()
+
+    def visit_Assign(self, node: ast.Assign):
+        value = self._eval(node.value)
+        assert len(node.targets) == 1
+        target = node.targets[0]
+        assert isinstance(target, ast.Name)
+        self.symbols[target.id] = value
+
+    def visit_Expr(self, node: ast.Expr):
+        self._eval(node.value)
+
+    # ------------------------------------------------------------------
+    # Expression evaluator (returns a PyValue or None for void ops)
+    # ------------------------------------------------------------------
+
+    def _eval(self, node: ast.expr):
+        if isinstance(node, ast.Constant):
+            return self.builder.emit_const(int(node.value))
+
+        if isinstance(node, ast.Name):
+            assert node.id in self.symbols, f"undefined: {node.id}"
+            return self.symbols[node.id]
+
+        if isinstance(node, ast.BinOp):
+            lhs = self._eval(node.left)
+            rhs = self._eval(node.right)
+            if isinstance(node.op, ast.Add):
+                return self.builder.emit_add(lhs, rhs)
+            if isinstance(node.op, ast.Sub):
+                return self.builder.emit_sub(lhs, rhs)
+            if isinstance(node.op, ast.Mult):
+                return self.builder.emit_mul(lhs, rhs)
+            raise NotImplementedError(f"unsupported binop: {type(node.op)}")
+
+        if isinstance(node, ast.Compare):
+            assert len(node.ops) == 1 and len(node.comparators) == 1
+            lhs = self._eval(node.left)
+            rhs = self._eval(node.comparators[0])
+            if isinstance(node.ops[0], ast.Lt):
+                return self.builder.emit_cmp_lt(lhs, rhs)
+            raise NotImplementedError(f"unsupported cmp: {type(node.ops[0])}")
+
+        if isinstance(node, ast.Call):
+            return self._eval_call(node)
+
+        raise NotImplementedError(f"unsupported AST node: {type(node)}")
+
+    # ------------------------------------------------------------------
+    # Call dispatch
+    # ------------------------------------------------------------------
+
+    def _eval_call(self, node: ast.Call):
+        builtin = self._resolve_builtin(node.func)
+        if builtin is None:
+            raise NotImplementedError(f"unsupported call: {ast.dump(node.func)}")
+
+        if builtin == "program_id":
+            axis = node.args[0].value if node.args else 0
+            return self.builder.emit_program_id(int(axis))
+
+        if builtin == "arange":
+            start = node.args[0].value
+            end = node.args[1].value
+            self.block_size = int(end) - int(start)
+            return self.builder.emit_thread_id(0)
+
+        if builtin == "load":
+            addr = self._eval(node.args[0])
+            mask = self._get_kwarg(node, "mask")
+            return self.builder.emit_load(addr, mask=mask)
+
+        if builtin == "store":
+            addr = self._eval(node.args[0])
+            val = self._eval(node.args[1])
+            mask = self._get_kwarg(node, "mask")
+            self.builder.emit_store(addr, val, mask=mask)
+            return None
+
+        raise NotImplementedError(f"unsupported builtin: {builtin}")
+
+    @staticmethod
+    def _resolve_builtin(func_node) -> Optional[str]:
+        """Return the builtin name if func_node is tt.<builtin>, else None."""
+        if isinstance(func_node, ast.Attribute):
+            if isinstance(func_node.value, ast.Name):
+                if func_node.value.id in _MODULE_ALIASES:
+                    if func_node.attr in _BUILTINS:
+                        return func_node.attr
+        return None
+
+    def _get_kwarg(self, node: ast.Call, name: str):
+        for kw in node.keywords:
+            if kw.arg == name:
+                return self._eval(kw.value)
+        return None
 
 
 class JITFunction:
@@ -32,56 +156,70 @@ class JITFunction:
             for a in args
         )
 
-    def _compile(self, args: tuple) -> Any:
-        """Walk Python AST and emit IR via C++ builder."""
-        # TODO: implement — use _tiny_ton_core.IRBuilder
-        raise NotImplementedError("JIT compilation not implemented yet")
+    def _compile(self, args: tuple):
+        import _tiny_ton_core as core
 
-    def _launch(self, compiled: Any, grid: tuple, args: tuple) -> None:
-        """Execute a compiled kernel with the given grid and arguments."""
-        # TODO: implement — call _tiny_ton_core.Runtime.launch
-        raise NotImplementedError("Kernel launch not implemented yet")
+        func_def = None
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.FunctionDef):
+                func_def = node
+                break
+        assert func_def is not None, "no function found in source"
 
+        param_names = [a.arg for a in func_def.args.args]
 
-class KernelVisitor(ast.NodeVisitor):
-    """Walks a Python AST and emits TinyTon IR via the C++ IRBuilder."""
+        builder = core.IRBuilder()
+        builder.begin_function(func_def.name)
 
-    def __init__(self, builder, args):
-        self.builder = builder
-        self.symbols: dict[str, Any] = {}
-        self.args = args
+        visitor = KernelVisitor(builder, param_names)
+        visitor.visit(func_def)
 
-    def visit_FunctionDef(self, node: ast.FunctionDef):
-        # TODO: implement
-        pass
+        result = builder.compile()
+        assert result.success, f"compilation failed: {result.error}"
 
-    def visit_Assign(self, node: ast.Assign):
-        # TODO: implement
-        pass
+        binary = result.get_binary()
+        block_size = visitor.block_size or 1
+        return {"binary": binary, "block_size": block_size}
 
-    def visit_Expr(self, node: ast.Expr):
-        # TODO: implement
-        pass
+    def _launch(self, compiled, grid: tuple, args: tuple):
+        import _tiny_ton_core as core
 
-    def visit_For(self, node: ast.For):
-        # TODO: implement
-        pass
+        binary = compiled["binary"]
+        block_size = compiled["block_size"]
+        num_blocks = grid[0] if grid else 1
 
-    def visit_If(self, node: ast.If):
-        # TODO: implement
-        pass
+        total_elements = 0
+        for a in args:
+            if isinstance(a, np.ndarray):
+                total_elements += a.size
 
-    def visit_Call(self, node: ast.Call):
-        # TODO: implement
-        pass
+        mem_words = max(total_elements + 1024, 4096)
+        sim = core.SimulatedGPU(mem_words)
 
-    def visit_BinOp(self, node: ast.BinOp):
-        # TODO: implement
-        pass
+        kernel_args = []
+        next_addr = 0
+        array_mappings = []
 
-    def visit_Compare(self, node: ast.Compare):
-        # TODO: implement
-        pass
+        for a in args:
+            if isinstance(a, np.ndarray):
+                flat = a.flatten().astype(np.int32)
+                data = flat.tolist()
+                sim.write_memory(next_addr, data)
+                array_mappings.append((next_addr, len(data), a))
+                kernel_args.append(next_addr)
+                next_addr += len(data)
+            else:
+                kernel_args.append(int(a))
+
+        sim.set_args(kernel_args)
+
+        prog = [int(x) for x in binary]
+        sim.load_program(prog)
+        sim.run(num_blocks, block_size)
+
+        for base_addr, count, arr in array_mappings:
+            result = sim.read_memory(base_addr, count)
+            arr.flat[:] = result
 
 
 def jit(fn):

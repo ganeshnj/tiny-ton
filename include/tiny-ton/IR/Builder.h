@@ -1,34 +1,39 @@
 #pragma once
 
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Value.h"
+
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <vector>
 
 namespace tinyton {
-
-struct Value;
-struct Function;
 
 class IRBuilder {
 public:
   IRBuilder();
   ~IRBuilder();
 
-  void beginFunction(const std::string &name, int numArgs);
-  Value *getArg(int index);
+  void beginFunction(const std::string &name);
 
-  Value *emitConst(int64_t val);
-  Value *emitAdd(Value *lhs, Value *rhs);
-  Value *emitSub(Value *lhs, Value *rhs);
-  Value *emitMul(Value *lhs, Value *rhs);
-  Value *emitDiv(Value *lhs, Value *rhs);
-  Value *emitLoad(Value *addr);
-  void emitStore(Value *addr, Value *val);
-  Value *emitProgramId(int axis);
+  mlir::Value emitConst(int64_t val);
+  mlir::Value emitArg(int64_t index);
+  mlir::Value emitProgramId(int64_t axis);
+  mlir::Value emitThreadId(int64_t axis);
+
+  mlir::Value emitAdd(mlir::Value lhs, mlir::Value rhs);
+  mlir::Value emitSub(mlir::Value lhs, mlir::Value rhs);
+  mlir::Value emitMul(mlir::Value lhs, mlir::Value rhs);
+  mlir::Value emitCmpLt(mlir::Value lhs, mlir::Value rhs);
+
+  mlir::Value emitLoad(mlir::Value addr, mlir::Value mask = {});
+  void emitStore(mlir::Value addr, mlir::Value val, mlir::Value mask = {});
+
+  void emitBranchZero(mlir::Value cond, int64_t skip);
   void emitRet();
 
-  std::unique_ptr<Function> build();
+  mlir::ModuleOp getModule();
 
 private:
   struct Impl;

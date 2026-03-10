@@ -7,4 +7,6 @@ target_link_libraries(TinyTonCompiler
   PUBLIC
   TinyTonIR
   TinyTonDialect
+  MLIRIR
+  MLIRSupport
 )

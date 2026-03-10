@@ -1,11 +1,17 @@
 #pragma once
 
+#include "tiny-ton/Compiler/CodeGen.h"
+#include "tiny-ton/Compiler/RegisterAlloc.h"
+
+#include "mlir/IR/BuiltinOps.h"
+
 #include <string>
+#include <vector>
 
 namespace tinyton {
 
 struct CompileOptions {
-  enum class EmitMode { MLIR, Asm, Hex, Bin, Trace };
+  enum class EmitMode { MLIR, Asm, Hex, Bin };
   EmitMode emitMode = EmitMode::Asm;
 };
 
@@ -13,8 +19,9 @@ struct CompileResult {
   bool success = false;
   std::string output;
   std::string error;
+  std::vector<Instruction> instructions;
 };
 
-CompileResult compile(const std::string &source, const CompileOptions &opts);
+CompileResult compileModule(mlir::ModuleOp module, const CompileOptions &opts);
 
 } // namespace tinyton

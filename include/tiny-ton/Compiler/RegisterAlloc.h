@@ -1,9 +1,13 @@
 #pragma once
 
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Value.h"
+#include "llvm/ADT/DenseMap.h"
+
 namespace tinyton {
 
-struct Function;
+using RegisterMap = llvm::DenseMap<mlir::Value, int>;
 
-void allocateRegisters(Function &func);
+RegisterMap allocateRegisters(mlir::ModuleOp module);
 
 } // namespace tinyton

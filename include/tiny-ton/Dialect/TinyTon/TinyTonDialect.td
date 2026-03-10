@@ -14,6 +14,7 @@ def TinyTon_Dialect : Dialect {
     block-level parallelism with explicit memory operations.
   }];
   let cppNamespace = "::tinyton";
+  let usePropertiesForAttributes = 0;
 }
 
 #endif // TINYTON_DIALECT

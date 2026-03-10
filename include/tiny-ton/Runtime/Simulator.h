@@ -7,13 +7,14 @@ namespace tinyton {
 
 class SimulatedGPU {
 public:
-  SimulatedGPU();
+  explicit SimulatedGPU(int memWords = 4096);
   ~SimulatedGPU();
 
   void loadProgram(const std::vector<uint16_t> &instructions);
-  void loadDataMemory(const std::vector<uint8_t> &data);
+  void setArgs(const std::vector<int32_t> &args);
+  void writeMemory(int addr, const std::vector<int32_t> &data);
+  std::vector<int32_t> readMemory(int addr, int count) const;
   void run(int numBlocks, int threadsPerBlock);
-  std::vector<uint8_t> readDataMemory() const;
 
 private:
   struct Impl;

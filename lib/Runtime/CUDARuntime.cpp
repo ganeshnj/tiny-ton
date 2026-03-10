@@ -60,12 +60,13 @@ void CUDARuntime::launch(const std::string &ptx,
   CUfunction cuFunc;
   CUDA_CHECK(cuModuleGetFunction(&cuFunc, cuModule, kernelName.c_str()));
 
-  std::vector<void *> args(kernelArgs.size());
-  for (size_t i = 0; i < kernelArgs.size(); ++i)
-    args[i] = const_cast<void *>(&kernelArgs[i]);
+  std::vector<void *> argsCopy(kernelArgs);
+  std::vector<void *> argPtrs(argsCopy.size());
+  for (size_t i = 0; i < argsCopy.size(); ++i)
+    argPtrs[i] = &argsCopy[i];
 
   CUDA_CHECK(cuLaunchKernel(cuFunc, gridX, 1, 1, blockX, 1, 1, 0, nullptr,
-                            args.data(), nullptr));
+                            argPtrs.data(), nullptr));
 
   CUDA_CHECK(cuCtxSynchronize());
   CUDA_CHECK(cuModuleUnload(cuModule));

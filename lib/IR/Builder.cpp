@@ -37,11 +37,13 @@ mlir::Value IRBuilder::emitConst(int64_t val) {
       .getResult();
 }
 
-mlir::Value IRBuilder::emitArg(int64_t index) {
+mlir::Value IRBuilder::emitArg(int64_t index, bool isPointer) {
   auto loc = mlir::UnknownLoc::get(&impl_->context);
   auto i32Ty = impl_->builder->getI32Type();
-  auto attr = impl_->builder->getI32IntegerAttr(index);
-  return impl_->builder->create<tinyton::ArgOp>(loc, i32Ty, attr).getResult();
+  auto indexAttr = impl_->builder->getI32IntegerAttr(index);
+  auto ptrAttr = impl_->builder->getBoolAttr(isPointer);
+  return impl_->builder->create<tinyton::ArgOp>(loc, i32Ty, indexAttr, ptrAttr)
+      .getResult();
 }
 
 mlir::Value IRBuilder::emitProgramId(int64_t axis) {

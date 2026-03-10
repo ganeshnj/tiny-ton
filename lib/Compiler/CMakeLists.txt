@@ -7,6 +7,19 @@ target_link_libraries(TinyTonCompiler
   PUBLIC
   TinyTonIR
   TinyTonDialect
+  TinyTonConversion
   MLIRIR
   MLIRSupport
+  MLIRPass
+  MLIRGPUDialect
+  MLIRGPUToNVVMTransforms
+  MLIRArithToLLVM
+  MLIRReconcileUnrealizedCasts
+  MLIRNVVMDialect
+  MLIRBuiltinToLLVMIRTranslation
+  MLIRNVVMToLLVMIRTranslation
+  MLIRLLVMToLLVMIRTranslation
+  MLIRTargetLLVMIRExport
+  MLIRLLVMDialect
+  MLIRSCFDialect
 )

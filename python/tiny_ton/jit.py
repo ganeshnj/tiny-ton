@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import os
 import textwrap
 from typing import Any, Optional
 
@@ -19,13 +20,15 @@ _MODULE_ALIASES = {"tt", "tiny_ton"}
 class KernelVisitor(ast.NodeVisitor):
     """Walks a Python AST and emits TinyTon IR via the C++ IRBuilder."""
 
-    def __init__(self, builder, param_names: list[str]):
+    def __init__(self, builder, param_names: list[str],
+                 arg_is_pointer: Optional[list[bool]] = None):
         self.builder = builder
         self.symbols: dict[str, Any] = {}
         self.block_size: Optional[int] = None
 
         for i, name in enumerate(param_names):
-            self.symbols[name] = builder.emit_arg(i)
+            is_ptr = arg_is_pointer[i] if arg_is_pointer else False
+            self.symbols[name] = builder.emit_arg(i, is_pointer=is_ptr)
 
     # ------------------------------------------------------------------
     # Statements
@@ -167,21 +170,80 @@ class JITFunction:
         assert func_def is not None, "no function found in source"
 
         param_names = [a.arg for a in func_def.args.args]
+        arg_is_pointer = [isinstance(a, np.ndarray) for a in args]
+
+        use_cuda = core.has_cuda()
 
         builder = core.IRBuilder()
         builder.begin_function(func_def.name)
 
-        visitor = KernelVisitor(builder, param_names)
+        visitor = KernelVisitor(builder, param_names, arg_is_pointer)
         visitor.visit(func_def)
+
+        block_size = visitor.block_size or 1
+
+        if use_cuda:
+            sm = os.environ.get("TTN_SM_VERSION", "sm_87")
+            nvptx_result = builder.compile_to_nvptx(sm_version=sm)
+            assert nvptx_result.success, \
+                f"NVPTX compilation failed: {nvptx_result.error}"
+            return {
+                "backend": "cuda",
+                "ptx": nvptx_result.ptx,
+                "kernel_name": nvptx_result.kernel_name,
+                "block_size": block_size,
+            }
 
         result = builder.compile()
         assert result.success, f"compilation failed: {result.error}"
-
-        binary = result.get_binary()
-        block_size = visitor.block_size or 1
-        return {"binary": binary, "block_size": block_size}
+        return {
+            "backend": "simulator",
+            "binary": result.get_binary(),
+            "block_size": block_size,
+        }
 
     def _launch(self, compiled, grid: tuple, args: tuple):
+        if compiled["backend"] == "cuda":
+            self._launch_cuda(compiled, grid, args)
+        else:
+            self._launch_simulator(compiled, grid, args)
+
+    def _launch_cuda(self, compiled, grid: tuple, args: tuple):
+        import _tiny_ton_core as core
+
+        rt = core.CUDARuntime()
+        block_size = compiled["block_size"]
+        num_blocks = grid[0] if grid else 1
+
+        dev_ptrs = []
+        array_mappings = []
+
+        kernel_args = []
+        for a in args:
+            if isinstance(a, np.ndarray):
+                flat = np.ascontiguousarray(a.flatten(), dtype=np.int32)
+                nbytes = flat.nbytes
+                dptr = rt.alloc(nbytes)
+                rt.copy_to_device(dptr, flat)
+                dev_ptrs.append(dptr)
+                array_mappings.append((dptr, nbytes, a))
+                kernel_args.append(dptr)
+            else:
+                kernel_args.append(int(a))
+
+        try:
+            rt.launch(compiled["ptx"], compiled["kernel_name"],
+                      num_blocks, block_size, kernel_args)
+
+            for dptr, nbytes, arr in array_mappings:
+                flat = np.empty(arr.size, dtype=np.int32)
+                rt.copy_from_device(flat, dptr, nbytes)
+                arr.flat[:] = flat
+        finally:
+            for dptr in dev_ptrs:
+                rt.free(dptr)
+
+    def _launch_simulator(self, compiled, grid: tuple, args: tuple):
         import _tiny_ton_core as core
 
         binary = compiled["binary"]

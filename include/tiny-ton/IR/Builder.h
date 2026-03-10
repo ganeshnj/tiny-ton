@@ -18,7 +18,7 @@ public:
   void beginFunction(const std::string &name);
 
   mlir::Value emitConst(int64_t val);
-  mlir::Value emitArg(int64_t index);
+  mlir::Value emitArg(int64_t index, bool isPointer = false);
   mlir::Value emitProgramId(int64_t axis);
   mlir::Value emitThreadId(int64_t axis);
 

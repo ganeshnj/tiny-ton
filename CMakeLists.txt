@@ -28,6 +28,14 @@ include_directories(${MLIR_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${PROJECT_BINARY_DIR}/include)
 
+# --- CUDA (optional) --------------------------------------------------------
+option(TTN_ENABLE_CUDA "Build CUDA/PTX backend for real GPU execution" OFF)
+if(TTN_ENABLE_CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  message(STATUS "CUDA toolkit found: ${CUDAToolkit_LIBRARY_DIR}")
+  add_compile_definitions(TTN_ENABLE_CUDA)
+endif()
+
 # --- Sub-projects -----------------------------------------------------------
 add_subdirectory(include)
 add_subdirectory(lib)

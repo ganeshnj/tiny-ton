@@ -55,9 +55,10 @@ def TinyTon_ConstOp : TinyTon_Op<"const", [Pure]> {
 
 def TinyTon_ArgOp : TinyTon_Op<"arg", [Pure]> {
   let summary = "Load a kernel argument by index.";
-  let arguments = (ins I32Attr:$index);
+  let arguments = (ins I32Attr:$index,
+                       DefaultValuedAttr<BoolAttr, "false">:$is_pointer);
   let results = (outs I32:$result);
-  let assemblyFormat = "$index attr-dict";
+  let assemblyFormat = "$index (`ptr` $is_pointer^)? attr-dict";
 }
 
 // --- Thread identification -------------------------------------------------

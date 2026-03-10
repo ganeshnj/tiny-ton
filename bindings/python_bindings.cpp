@@ -5,6 +5,12 @@
 #include "tiny-ton/Compiler/Pipeline.h"
 #include "tiny-ton/Runtime/Simulator.h"
 
+#include "llvm/Support/raw_ostream.h"
+
+#ifdef TTN_ENABLE_CUDA
+#include "tiny-ton/Runtime/CUDARuntime.h"
+#endif
+
 namespace py = pybind11;
 
 namespace {
@@ -31,9 +37,10 @@ PYBIND11_MODULE(_tiny_ton_core, m) {
              return PyValue{self.emitConst(val)};
            })
       .def("emit_arg",
-           [](tinyton::IRBuilder &self, int64_t index) {
-             return PyValue{self.emitArg(index)};
-           })
+           [](tinyton::IRBuilder &self, int64_t index, bool isPointer) {
+             return PyValue{self.emitArg(index, isPointer)};
+           },
+           py::arg("index"), py::arg("is_pointer") = false)
       .def("emit_program_id",
            [](tinyton::IRBuilder &self, int64_t axis) {
              return PyValue{self.emitProgramId(axis)};
@@ -80,12 +87,24 @@ PYBIND11_MODULE(_tiny_ton_core, m) {
              self.emitBranchZero(cond.val, skip);
            })
       .def("emit_ret", [](tinyton::IRBuilder &self) { self.emitRet(); })
+      .def("dump_mlir",
+           [](tinyton::IRBuilder &self) {
+             std::string out;
+             llvm::raw_string_ostream os(out);
+             self.getModule().print(os);
+             return os.str();
+           })
       .def("compile",
            [](tinyton::IRBuilder &self) {
              tinyton::CompileOptions opts;
              opts.emitMode = tinyton::CompileOptions::EmitMode::Asm;
              return tinyton::compileModule(self.getModule(), opts);
-           });
+           })
+      .def("compile_to_nvptx",
+           [](tinyton::IRBuilder &self, const std::string &sm) {
+             return tinyton::compileToNVPTX(self.getModule(), sm);
+           },
+           py::arg("sm_version") = "sm_87");
 
   py::class_<tinyton::CompileResult>(m, "CompileResult")
       .def_readonly("success", &tinyton::CompileResult::success)
@@ -100,6 +119,12 @@ PYBIND11_MODULE(_tiny_ton_core, m) {
         return binary;
       });
 
+  py::class_<tinyton::NVPTXCompileResult>(m, "NVPTXCompileResult")
+      .def_readonly("success", &tinyton::NVPTXCompileResult::success)
+      .def_readonly("ptx", &tinyton::NVPTXCompileResult::ptx)
+      .def_readonly("kernel_name", &tinyton::NVPTXCompileResult::kernelName)
+      .def_readonly("error", &tinyton::NVPTXCompileResult::error);
+
   py::class_<tinyton::SimulatedGPU>(m, "SimulatedGPU")
       .def(py::init<int>(), py::arg("mem_words") = 4096)
       .def("load_program", &tinyton::SimulatedGPU::loadProgram)
@@ -107,4 +132,44 @@ PYBIND11_MODULE(_tiny_ton_core, m) {
       .def("write_memory", &tinyton::SimulatedGPU::writeMemory)
       .def("read_memory", &tinyton::SimulatedGPU::readMemory)
       .def("run", &tinyton::SimulatedGPU::run);
+
+#ifdef TTN_ENABLE_CUDA
+  m.def("has_cuda", [] { return tinyton::CUDARuntime::isAvailable(); });
+
+  py::class_<tinyton::CUDARuntime>(m, "CUDARuntime")
+      .def(py::init<>())
+      .def("alloc",
+           [](tinyton::CUDARuntime &self, size_t bytes) {
+             return reinterpret_cast<uintptr_t>(self.alloc(bytes));
+           })
+      .def("free",
+           [](tinyton::CUDARuntime &self, uintptr_t ptr) {
+             self.free(reinterpret_cast<void *>(ptr));
+           })
+      .def("copy_to_device",
+           [](tinyton::CUDARuntime &self, uintptr_t dst, py::buffer src) {
+             auto info = src.request();
+             self.copyToDevice(reinterpret_cast<void *>(dst), info.ptr,
+                               static_cast<size_t>(info.size * info.itemsize));
+           })
+      .def("copy_from_device",
+           [](tinyton::CUDARuntime &self, py::buffer dst, uintptr_t src,
+              size_t bytes) {
+             auto info = dst.request(true);
+             self.copyFromDevice(info.ptr, reinterpret_cast<void *>(src),
+                                 bytes);
+           })
+      .def("launch",
+           [](tinyton::CUDARuntime &self, const std::string &ptx,
+              const std::string &kernelName, int gridX, int blockX,
+              const std::vector<uintptr_t> &args) {
+             std::vector<void *> voidArgs;
+             voidArgs.reserve(args.size());
+             for (auto a : args)
+               voidArgs.push_back(reinterpret_cast<void *>(a));
+             self.launch(ptx, kernelName, gridX, blockX, voidArgs);
+           });
+#else
+  m.def("has_cuda", [] { return false; });
+#endif
 }

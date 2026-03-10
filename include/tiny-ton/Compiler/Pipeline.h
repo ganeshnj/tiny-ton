@@ -24,4 +24,14 @@ struct CompileResult {
 
 CompileResult compileModule(mlir::ModuleOp module, const CompileOptions &opts);
 
+struct NVPTXCompileResult {
+  bool success = false;
+  std::string ptx;
+  std::string kernelName;
+  std::string error;
+};
+
+NVPTXCompileResult compileToNVPTX(mlir::ModuleOp module,
+                                  llvm::StringRef smVersion = "sm_87");
+
 } // namespace tinyton

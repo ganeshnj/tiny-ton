@@ -22,6 +22,34 @@ static uint32_t floatBits(float f) {
   return bits;
 }
 
+static uint16_t halfBits(float f) {
+  // Convert f32 -> f16 bit pattern via manual IEEE 754 conversion.
+  uint32_t fb = floatBits(f);
+  uint32_t sign = (fb >> 16) & 0x8000;
+  int32_t exp = ((fb >> 23) & 0xFF) - 127 + 15;
+  uint32_t mant = (fb >> 13) & 0x3FF;
+
+  if (((fb >> 23) & 0xFF) == 0xFF) {
+    // Inf / NaN
+    return static_cast<uint16_t>(sign | 0x7C00 | (mant ? 0x200 : 0));
+  }
+  if (exp <= 0) {
+    // Underflow -> zero
+    return static_cast<uint16_t>(sign);
+  }
+  if (exp >= 0x1F) {
+    // Overflow -> Inf
+    return static_cast<uint16_t>(sign | 0x7C00);
+  }
+  return static_cast<uint16_t>(sign | (exp << 10) | mant);
+}
+
+static bool isFloatResult(mlir::Value v) {
+  return llvm::isa<mlir::FloatType>(v.getType());
+}
+
+static bool isF16Result(mlir::Value v) { return v.getType().isF16(); }
+
 std::vector<Instruction> emit(mlir::ModuleOp module,
                               const RegisterMap &regMap) {
   std::vector<Instruction> instructions;
@@ -59,6 +87,19 @@ std::vector<Instruction> emit(mlir::ModuleOp module,
       instructions.push_back({hi, llvm::formatv("  .hi 0x{0:X-4}", hi)});
       instructions.push_back({lo, llvm::formatv("  .lo 0x{0:X-4}", lo)});
 
+    } else if (auto hconstOp = llvm::dyn_cast<tinyton::HConstOp>(&op)) {
+      uint8_t rd = getReg(hconstOp.getResult());
+      float fval = hconstOp.getValue().convertToFloat();
+      uint16_t hbits = halfBits(fval);
+
+      // 2-word encoding: opcode word (sub-op 0x03) + 16-bit f16 value
+      uint16_t enc = encodeRI(0xE, rd, 0x03 << 4);
+      std::string asm_str =
+          llvm::formatv("HCONST R{0}, #{1}", (int)rd, fval);
+      instructions.push_back({enc, asm_str});
+      instructions.push_back(
+          {hbits, llvm::formatv("  .f16 0x{0:X-4}", hbits)});
+
     } else if (auto argOp = llvm::dyn_cast<tinyton::ArgOp>(&op)) {
       uint8_t rd = getReg(argOp.getResult());
       uint8_t imm = static_cast<uint8_t>(argOp.getIndex() & 0xFF);
@@ -83,63 +124,114 @@ std::vector<Instruction> emit(mlir::ModuleOp module,
           llvm::formatv("TID R{0}, #{1}", (int)rd, (int)imm);
       instructions.push_back({enc, asm_str});
 
-    // --- Integer Arithmetic ---
+    // --- Arithmetic (integer and float) ---
 
     } else if (auto addOp = llvm::dyn_cast<tinyton::AddOp>(&op)) {
       uint8_t rd = getReg(addOp.getResult());
       uint8_t rs = getReg(addOp.getLhs());
       uint8_t rt = getReg(addOp.getRhs());
-      bool isFloat = addOp.getResult().getType().isF32();
-      uint8_t opc = isFloat ? 0x0 : 0x3;
-      std::string mnemonic = isFloat ? "FADD" : "ADD";
-      uint16_t enc = encodeRRR(opc, rd, rs, rt);
-      std::string asm_str =
-          llvm::formatv("{0} R{1}, R{2}, R{3}", mnemonic, (int)rd, (int)rs,
-                        (int)rt);
-      instructions.push_back({enc, asm_str});
+
+      if (isF16Result(addOp.getResult())) {
+        // HADD: extended opcode 0xE, sub-op 0x04
+        uint16_t enc = encodeRI(0xE, rd, 0x04 << 4);
+        uint16_t operands = (rs << 4) | rt;
+        instructions.push_back(
+            {enc, llvm::formatv("HADD R{0}, R{1}, R{2}", (int)rd, (int)rs,
+                                (int)rt)});
+        instructions.push_back(
+            {operands,
+             llvm::formatv("  .operands R{0}, R{1}", (int)rs, (int)rt)});
+      } else if (isFloatResult(addOp.getResult())) {
+        uint16_t enc = encodeRRR(0x0, rd, rs, rt);
+        instructions.push_back(
+            {enc, llvm::formatv("FADD R{0}, R{1}, R{2}", (int)rd, (int)rs,
+                                (int)rt)});
+      } else {
+        uint16_t enc = encodeRRR(0x3, rd, rs, rt);
+        instructions.push_back(
+            {enc, llvm::formatv("ADD R{0}, R{1}, R{2}", (int)rd, (int)rs,
+                                (int)rt)});
+      }
 
     } else if (auto subOp = llvm::dyn_cast<tinyton::SubOp>(&op)) {
       uint8_t rd = getReg(subOp.getResult());
       uint8_t rs = getReg(subOp.getLhs());
       uint8_t rt = getReg(subOp.getRhs());
-      bool isFloat = subOp.getResult().getType().isF32();
-      uint8_t opc = isFloat ? 0x1 : 0x4;
-      std::string mnemonic = isFloat ? "FSUB" : "SUB";
-      uint16_t enc = encodeRRR(opc, rd, rs, rt);
-      std::string asm_str =
-          llvm::formatv("{0} R{1}, R{2}, R{3}", mnemonic, (int)rd, (int)rs,
-                        (int)rt);
-      instructions.push_back({enc, asm_str});
+
+      if (isF16Result(subOp.getResult())) {
+        uint16_t enc = encodeRI(0xE, rd, 0x05 << 4);
+        uint16_t operands = (rs << 4) | rt;
+        instructions.push_back(
+            {enc, llvm::formatv("HSUB R{0}, R{1}, R{2}", (int)rd, (int)rs,
+                                (int)rt)});
+        instructions.push_back(
+            {operands,
+             llvm::formatv("  .operands R{0}, R{1}", (int)rs, (int)rt)});
+      } else if (isFloatResult(subOp.getResult())) {
+        uint16_t enc = encodeRRR(0x1, rd, rs, rt);
+        instructions.push_back(
+            {enc, llvm::formatv("FSUB R{0}, R{1}, R{2}", (int)rd, (int)rs,
+                                (int)rt)});
+      } else {
+        uint16_t enc = encodeRRR(0x4, rd, rs, rt);
+        instructions.push_back(
+            {enc, llvm::formatv("SUB R{0}, R{1}, R{2}", (int)rd, (int)rs,
+                                (int)rt)});
+      }
 
     } else if (auto mulOp = llvm::dyn_cast<tinyton::MulOp>(&op)) {
       uint8_t rd = getReg(mulOp.getResult());
       uint8_t rs = getReg(mulOp.getLhs());
       uint8_t rt = getReg(mulOp.getRhs());
-      bool isFloat = mulOp.getResult().getType().isF32();
-      uint8_t opc = isFloat ? 0x2 : 0x5;
-      std::string mnemonic = isFloat ? "FMUL" : "MUL";
-      uint16_t enc = encodeRRR(opc, rd, rs, rt);
-      std::string asm_str =
-          llvm::formatv("{0} R{1}, R{2}, R{3}", mnemonic, (int)rd, (int)rs,
-                        (int)rt);
-      instructions.push_back({enc, asm_str});
+
+      if (isF16Result(mulOp.getResult())) {
+        uint16_t enc = encodeRI(0xE, rd, 0x06 << 4);
+        uint16_t operands = (rs << 4) | rt;
+        instructions.push_back(
+            {enc, llvm::formatv("HMUL R{0}, R{1}, R{2}", (int)rd, (int)rs,
+                                (int)rt)});
+        instructions.push_back(
+            {operands,
+             llvm::formatv("  .operands R{0}, R{1}", (int)rs, (int)rt)});
+      } else if (isFloatResult(mulOp.getResult())) {
+        uint16_t enc = encodeRRR(0x2, rd, rs, rt);
+        instructions.push_back(
+            {enc, llvm::formatv("FMUL R{0}, R{1}, R{2}", (int)rd, (int)rs,
+                                (int)rt)});
+      } else {
+        uint16_t enc = encodeRRR(0x5, rd, rs, rt);
+        instructions.push_back(
+            {enc, llvm::formatv("MUL R{0}, R{1}, R{2}", (int)rd, (int)rs,
+                                (int)rt)});
+      }
 
     } else if (auto divOp = llvm::dyn_cast<tinyton::DivOp>(&op)) {
       uint8_t rd = getReg(divOp.getResult());
       uint8_t rs = getReg(divOp.getLhs());
       uint8_t rt = getReg(divOp.getRhs());
-      // FDIV uses opcode 0xE with sub-opcode 0x01 in imm field
-      bool isFloat = divOp.getResult().getType().isF32();
-      std::string mnemonic = isFloat ? "FDIV" : "DIV";
-      // Encode as: 0xE_rd_01 for float div, re-use with rs/rt in next word
-      // Simpler: use opcode 0xE, rd field, and pack rs|rt in low byte
-      uint16_t enc = encodeRI(0xE, rd, (0x01 << 4) | 0x0);
-      uint16_t operands = (rs << 4) | rt;
-      instructions.push_back(
-          {enc, llvm::formatv("{0} R{1}, R{2}, R{3}", mnemonic, (int)rd,
-                              (int)rs, (int)rt)});
-      instructions.push_back(
-          {operands, llvm::formatv("  .operands R{0}, R{1}", (int)rs, (int)rt)});
+
+      if (isF16Result(divOp.getResult())) {
+        // HDIV: extended opcode 0xE, sub-op 0x07
+        uint16_t enc = encodeRI(0xE, rd, 0x07 << 4);
+        uint16_t operands = (rs << 4) | rt;
+        instructions.push_back(
+            {enc, llvm::formatv("HDIV R{0}, R{1}, R{2}", (int)rd, (int)rs,
+                                (int)rt)});
+        instructions.push_back(
+            {operands,
+             llvm::formatv("  .operands R{0}, R{1}", (int)rs, (int)rt)});
+      } else {
+        // FDIV / DIV: sub-op 0x01
+        std::string mnemonic = isFloatResult(divOp.getResult()) ? "FDIV" : "DIV";
+        uint16_t enc = encodeRI(0xE, rd, (0x01 << 4) | 0x0);
+        uint16_t operands = (rs << 4) | rt;
+        instructions.push_back(
+            {enc, llvm::formatv("{0} R{1}, R{2}, R{3}", mnemonic, (int)rd,
+                                (int)rs, (int)rt)});
+        instructions.push_back(
+            {operands,
+             llvm::formatv("  .operands R{0}, R{1}", (int)rs, (int)rt)});
+      }
 
     // --- Comparison ---
 
@@ -147,20 +239,31 @@ std::vector<Instruction> emit(mlir::ModuleOp module,
       uint8_t rd = getReg(cmpOp.getResult());
       uint8_t rs = getReg(cmpOp.getLhs());
       uint8_t rt = getReg(cmpOp.getRhs());
-      bool isFloat = cmpOp.getLhs().getType().isF32();
-      if (isFloat) {
-        // FCMP_LT: opcode 0xE, sub-opcode 0x02
+
+      if (isF16Result(cmpOp.getLhs())) {
+        // HCMP_LT: extended opcode 0xE, sub-op 0x08
+        uint16_t enc = encodeRI(0xE, rd, 0x08 << 4);
+        uint16_t operands = (rs << 4) | rt;
+        instructions.push_back(
+            {enc, llvm::formatv("HCMP_LT R{0}, R{1}, R{2}", (int)rd, (int)rs,
+                                (int)rt)});
+        instructions.push_back(
+            {operands,
+             llvm::formatv("  .operands R{0}, R{1}", (int)rs, (int)rt)});
+      } else if (isFloatResult(cmpOp.getLhs())) {
+        // FCMP_LT: sub-op 0x02
         uint16_t enc = encodeRI(0xE, rd, 0x02 << 4);
         uint16_t operands = (rs << 4) | rt;
         instructions.push_back(
             {enc, llvm::formatv("FCMP_LT R{0}, R{1}, R{2}", (int)rd, (int)rs,
                                 (int)rt)});
         instructions.push_back(
-            {operands, llvm::formatv("  .operands R{0}, R{1}", (int)rs, (int)rt)});
+            {operands,
+             llvm::formatv("  .operands R{0}, R{1}", (int)rs, (int)rt)});
       } else {
         uint16_t enc = encodeRRR(0x6, rd, rs, rt);
-        std::string asm_str = llvm::formatv("CMP_LT R{0}, R{1}, R{2}", (int)rd,
-                                            (int)rs, (int)rt);
+        std::string asm_str = llvm::formatv("CMP_LT R{0}, R{1}, R{2}",
+                                            (int)rd, (int)rs, (int)rt);
         instructions.push_back({enc, asm_str});
       }
 
@@ -169,11 +272,19 @@ std::vector<Instruction> emit(mlir::ModuleOp module,
     } else if (auto loadOp = llvm::dyn_cast<tinyton::LoadOp>(&op)) {
       uint8_t rd = getReg(loadOp.getResult());
       uint8_t rs = getReg(loadOp.getAddr());
+      bool resIsF16 = isF16Result(loadOp.getResult());
+      bool resIsFloat = isFloatResult(loadOp.getResult());
 
       if (loadOp.getMask()) {
         uint8_t rm = getReg(loadOp.getMask());
-        if (loadOp.getResult().getType().isF32()) {
-          // Masked float load: FCONST rd,0.0 ; BZ mask,1 ; LDR rd,[rs]
+        if (resIsF16) {
+          // Masked f16 load: HCONST rd, 0.0
+          uint16_t hbits = halfBits(0.0f);
+          instructions.push_back(
+              {encodeRI(0xE, rd, 0x03 << 4),
+               llvm::formatv("HCONST R{0}, #0.0", (int)rd).str()});
+          instructions.push_back({hbits, "  .f16 0x0000"});
+        } else if (resIsFloat) {
           uint32_t zeroBits = floatBits(0.0f);
           uint16_t hi = static_cast<uint16_t>((zeroBits >> 16) & 0xFFFF);
           uint16_t lo = static_cast<uint16_t>(zeroBits & 0xFFFF);

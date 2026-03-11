@@ -1,6 +1,7 @@
 #include "tiny-ton/Conversion/TinyTonToGPU.h"
 #include "tiny-ton/Dialect/TinyTon/TinyTonDialect.h"
 #include "tiny-ton/Dialect/TinyTon/TinyTonOps.h"
+#include "tiny-ton/IR/ElementType.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -20,8 +21,10 @@ namespace {
 enum class ArgKind {
   ScalarI32,
   ScalarF32,
+  ScalarF16,
   PtrToI32,
   PtrToF32,
+  PtrToF16,
 };
 
 struct ArgInfo {
@@ -29,19 +32,55 @@ struct ArgInfo {
   ArgKind kind;
 
   bool isPointer() const {
-    return kind == ArgKind::PtrToI32 || kind == ArgKind::PtrToF32;
+    return kind == ArgKind::PtrToI32 || kind == ArgKind::PtrToF32 ||
+           kind == ArgKind::PtrToF16;
   }
 
-  mlir::Type elementType(mlir::Type i32Ty, mlir::Type f32Ty) const {
-    return (kind == ArgKind::ScalarF32 || kind == ArgKind::PtrToF32) ? f32Ty
-                                                                     : i32Ty;
+  mlir::Type elementType(mlir::MLIRContext *ctx) const {
+    switch (kind) {
+    case ArgKind::ScalarF32:
+    case ArgKind::PtrToF32:
+      return mlir::Float32Type::get(ctx);
+    case ArgKind::ScalarF16:
+    case ArgKind::PtrToF16:
+      return mlir::Float16Type::get(ctx);
+    default:
+      return mlir::IntegerType::get(ctx, 32);
+    }
   }
 };
 
-ArgKind classifyArg(bool isPointer, bool isFloat) {
-  if (isPointer)
-    return isFloat ? ArgKind::PtrToF32 : ArgKind::PtrToI32;
-  return isFloat ? ArgKind::ScalarF32 : ArgKind::ScalarI32;
+ArgKind classifyArg(bool isPointer, int64_t elemTypeInt) {
+  auto et = static_cast<ElementType>(elemTypeInt);
+  if (isPointer) {
+    switch (et) {
+    case ElementType::F32:
+      return ArgKind::PtrToF32;
+    case ElementType::F16:
+      return ArgKind::PtrToF16;
+    default:
+      return ArgKind::PtrToI32;
+    }
+  }
+  switch (et) {
+  case ElementType::F32:
+    return ArgKind::ScalarF32;
+  case ElementType::F16:
+    return ArgKind::ScalarF16;
+  default:
+    return ArgKind::ScalarI32;
+  }
+}
+
+bool isFloatType(mlir::Type ty) {
+  return llvm::isa<mlir::FloatType>(ty);
+}
+
+mlir::Value makeFloatZero(mlir::OpBuilder &builder, mlir::Location loc,
+                          mlir::Type floatTy) {
+  const auto &sem = llvm::cast<mlir::FloatType>(floatTy).getFloatSemantics();
+  return builder.create<mlir::arith::ConstantFloatOp>(
+      loc, llvm::APFloat::getZero(sem), llvm::cast<mlir::FloatType>(floatTy));
 }
 
 } // namespace
@@ -57,7 +96,6 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
   ctx->getOrLoadDialect<mlir::cf::ControlFlowDialect>();
 
   auto i32Ty = mlir::IntegerType::get(ctx, 32);
-  auto f32Ty = mlir::Float32Type::get(ctx);
   auto i1Ty = mlir::IntegerType::get(ctx, 1);
   auto globalPtrTy = mlir::LLVM::LLVMPointerType::get(ctx, 1);
 
@@ -70,7 +108,7 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
     if (auto argOp = llvm::dyn_cast<tinyton::ArgOp>(op)) {
       args.push_back(
           {argOp.getIndex(),
-           classifyArg(argOp.getIsPointer(), argOp.getIsFloat())});
+           classifyArg(argOp.getIsPointer(), argOp.getElemType())});
     }
   }
 
@@ -80,7 +118,7 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
     if (ai.isPointer())
       funcArgTypes[ai.index] = globalPtrTy;
     else
-      funcArgTypes[ai.index] = ai.elementType(i32Ty, f32Ty);
+      funcArgTypes[ai.index] = ai.elementType(ctx);
   }
 
   std::string kernelName = "tinyton_kernel";
@@ -105,19 +143,17 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
   builder.setInsertionPointToStart(entryBlock);
 
   mlir::IRMapping valueMap;
-
-  // Track pointer values and their element types (i32 or f32).
   llvm::DenseMap<mlir::Value, mlir::Type> pointerElementTypes;
 
   for (auto *op : srcOps) {
     if (auto argOp = llvm::dyn_cast<tinyton::ArgOp>(op)) {
-      auto kind = classifyArg(argOp.getIsPointer(), argOp.getIsFloat());
+      auto kind = classifyArg(argOp.getIsPointer(), argOp.getElemType());
       auto blockArg = entryBlock->getArgument(argOp.getIndex());
       valueMap.map(argOp.getResult(), blockArg);
-      if (kind == ArgKind::PtrToI32 || kind == ArgKind::PtrToF32) {
-        mlir::Type elemTy = (kind == ArgKind::PtrToF32) ? (mlir::Type)f32Ty
-                                                         : i32Ty;
-        pointerElementTypes[blockArg] = elemTy;
+      if (kind == ArgKind::PtrToI32 || kind == ArgKind::PtrToF32 ||
+          kind == ArgKind::PtrToF16) {
+        ArgInfo info{argOp.getIndex(), kind};
+        pointerElementTypes[blockArg] = info.elementType(ctx);
       }
 
     } else if (auto constOp = llvm::dyn_cast<tinyton::ConstOp>(op)) {
@@ -126,9 +162,20 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
       valueMap.map(constOp.getResult(), val);
 
     } else if (auto fconstOp = llvm::dyn_cast<tinyton::FConstOp>(op)) {
+      auto f32Ty = mlir::Float32Type::get(ctx);
       auto val = builder.create<mlir::arith::ConstantFloatOp>(
           loc, fconstOp.getValue(), f32Ty);
       valueMap.map(fconstOp.getResult(), val);
+
+    } else if (auto hconstOp = llvm::dyn_cast<tinyton::HConstOp>(op)) {
+      auto f16Ty = mlir::Float16Type::get(ctx);
+      llvm::APFloat f32Val = hconstOp.getValue();
+      bool losesInfo;
+      f32Val.convert(llvm::APFloat::IEEEhalf(),
+                     llvm::APFloat::rmNearestTiesToEven, &losesInfo);
+      auto val = builder.create<mlir::arith::ConstantFloatOp>(
+          loc, f32Val, f16Ty);
+      valueMap.map(hconstOp.getResult(), val);
 
     } else if (auto pidOp = llvm::dyn_cast<tinyton::ProgramIdOp>(op)) {
       auto dim = static_cast<mlir::gpu::Dimension>(pidOp.getAxis());
@@ -154,13 +201,12 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
       if (lhsIsPtr || rhsIsPtr) {
         auto base = lhsIsPtr ? lhs : rhs;
         auto offset = lhsIsPtr ? rhs : lhs;
-        mlir::Type elemTy =
-            lhsIsPtr ? it->second : it2->second;
+        mlir::Type elemTy = lhsIsPtr ? it->second : it2->second;
         auto gep = builder.create<mlir::LLVM::GEPOp>(
             loc, globalPtrTy, elemTy, base, mlir::ValueRange{offset});
         valueMap.map(addOp.getResult(), gep.getResult());
         pointerElementTypes[gep.getResult()] = elemTy;
-      } else if (lhs.getType().isF32()) {
+      } else if (isFloatType(lhs.getType())) {
         auto add = builder.create<mlir::arith::AddFOp>(loc, lhs, rhs);
         valueMap.map(addOp.getResult(), add);
       } else {
@@ -171,7 +217,7 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
     } else if (auto subOp = llvm::dyn_cast<tinyton::SubOp>(op)) {
       auto lhs = valueMap.lookup(subOp.getLhs());
       auto rhs = valueMap.lookup(subOp.getRhs());
-      if (lhs.getType().isF32()) {
+      if (isFloatType(lhs.getType())) {
         auto sub = builder.create<mlir::arith::SubFOp>(loc, lhs, rhs);
         valueMap.map(subOp.getResult(), sub);
       } else {
@@ -182,7 +228,7 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
     } else if (auto mulOp = llvm::dyn_cast<tinyton::MulOp>(op)) {
       auto lhs = valueMap.lookup(mulOp.getLhs());
       auto rhs = valueMap.lookup(mulOp.getRhs());
-      if (lhs.getType().isF32()) {
+      if (isFloatType(lhs.getType())) {
         auto mul = builder.create<mlir::arith::MulFOp>(loc, lhs, rhs);
         valueMap.map(mulOp.getResult(), mul);
       } else {
@@ -193,7 +239,7 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
     } else if (auto divOp = llvm::dyn_cast<tinyton::DivOp>(op)) {
       auto lhs = valueMap.lookup(divOp.getLhs());
       auto rhs = valueMap.lookup(divOp.getRhs());
-      if (lhs.getType().isF32()) {
+      if (isFloatType(lhs.getType())) {
         auto div = builder.create<mlir::arith::DivFOp>(loc, lhs, rhs);
         valueMap.map(divOp.getResult(), div);
       } else {
@@ -204,7 +250,7 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
     } else if (auto cmpOp = llvm::dyn_cast<tinyton::CmpLtOp>(op)) {
       auto lhs = valueMap.lookup(cmpOp.getLhs());
       auto rhs = valueMap.lookup(cmpOp.getRhs());
-      if (lhs.getType().isF32()) {
+      if (isFloatType(lhs.getType())) {
         auto cmp = builder.create<mlir::arith::CmpFOp>(
             loc, mlir::arith::CmpFPredicate::OLT, lhs, rhs);
         auto ext = builder.create<mlir::arith::ExtUIOp>(loc, i32Ty, cmp);
@@ -219,14 +265,12 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
     } else if (auto loadOp = llvm::dyn_cast<tinyton::LoadOp>(op)) {
       auto addr = valueMap.lookup(loadOp.getAddr());
 
-      // Determine the load element type from the pointer's tracked element type
-      // or from the load op's result type.
       mlir::Type elemTy = i32Ty;
       auto ptIt = pointerElementTypes.find(addr);
       if (ptIt != pointerElementTypes.end())
         elemTy = ptIt->second;
-      else if (loadOp.getResult().getType().isF32())
-        elemTy = f32Ty;
+      else if (isFloatType(loadOp.getResult().getType()))
+        elemTy = loadOp.getResult().getType();
 
       if (loadOp.getMask()) {
         auto mask = valueMap.lookup(loadOp.getMask());
@@ -242,9 +286,8 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
         region.push_back(mergeBlock);
 
         mlir::Value zero;
-        if (elemTy.isF32())
-          zero = builder.create<mlir::arith::ConstantFloatOp>(
-              loc, llvm::APFloat(0.0f), f32Ty);
+        if (isFloatType(elemTy))
+          zero = makeFloatZero(builder, loc, elemTy);
         else
           zero = builder.create<mlir::arith::ConstantIntOp>(loc, 0, i32Ty);
 

@@ -10,7 +10,7 @@ import textwrap
 import numpy as np
 import _tiny_ton_core as core
 import tiny_ton as tt
-from tiny_ton.jit import KernelVisitor, _FLOAT_DTYPES
+from tiny_ton.jit import KernelVisitor, _DTYPE_MAP
 
 SM_VERSION = os.environ.get("TTN_SM_VERSION", "sm_87")
 
@@ -55,16 +55,18 @@ def run_pipeline(label, args):
 
     param_names = [a.arg for a in func_def.args.args]
     arg_is_pointer = [isinstance(a, np.ndarray) for a in args]
-    arg_is_float = [
-        isinstance(a, np.ndarray) and a.dtype in _FLOAT_DTYPES
-        for a in args
-    ]
+    arg_dtypes = []
+    for a in args:
+        if isinstance(a, np.ndarray) and a.dtype in _DTYPE_MAP:
+            arg_dtypes.append(_DTYPE_MAP[a.dtype])
+        else:
+            arg_dtypes.append("i32")
 
     # -- MLIR --
     separator(f"STAGE 2: TinyTon MLIR ({label})")
     builder = core.IRBuilder()
     builder.begin_function(func_def.name)
-    visitor = KernelVisitor(builder, param_names, arg_is_pointer, arg_is_float)
+    visitor = KernelVisitor(builder, param_names, arg_is_pointer, arg_dtypes)
     visitor.visit(func_def)
     print(builder.dump_mlir())
 
@@ -79,7 +81,7 @@ def run_pipeline(label, args):
     builder2 = core.IRBuilder()
     builder2.begin_function(func_def.name)
     visitor2 = KernelVisitor(builder2, param_names, arg_is_pointer,
-                             arg_is_float)
+                             arg_dtypes)
     visitor2.visit(func_def)
     nvptx = builder2.compile_to_nvptx(sm_version=SM_VERSION)
     if nvptx.success:
@@ -100,8 +102,14 @@ f32_args = (np.zeros(256, np.float32), np.zeros(256, np.float32),
             np.zeros(256, np.float32), 256)
 run_pipeline("f32", f32_args)
 
+# ── f16 pipeline ────────────────────────────────────────────
 
-# ── Execute on simulator (both types) ───────────────────────
+f16_args = (np.zeros(256, np.float16), np.zeros(256, np.float16),
+            np.zeros(256, np.float16), 256)
+run_pipeline("f16", f16_args)
+
+
+# ── Execute on simulator (all types) ────────────────────────
 
 separator("STAGE 5: Execute i32 on Simulator")
 
@@ -132,22 +140,36 @@ assert np.allclose(c_f, a_f + b_f, atol=1e-6), "f32 FAIL!"
 print("  PASS")
 
 
+separator("STAGE 7: Execute f16 on Simulator")
+
+a_h = np.array([1.5, 2.5, 3.5, 0.1] * 64, dtype=np.float16)
+b_h = np.array([0.5, 0.5, 0.5, 0.9] * 64, dtype=np.float16)
+c_h = np.zeros(N, dtype=np.float16)
+vector_add[(N // 64,)](a_h, b_h, c_h, N)
+
+print(f"  a[:4] = {a_h[:4]}")
+print(f"  b[:4] = {b_h[:4]}")
+print(f"  c[:4] = {c_h[:4]}")
+assert np.allclose(c_h, a_h + b_h, atol=1e-3), "f16 FAIL!"
+print("  PASS")
+
+
 # ── Summary ─────────────────────────────────────────────────
 
 separator("Pipeline Summary")
-print("""  Python source (same kernel code for i32 and f32!)
-       │  (ast.parse)
-       ▼
+print("""  Python source (same kernel code for i32, f32, and f16!)
+       |  (ast.parse)
+       v
   Python AST
-       │  (KernelVisitor -- type inferred from numpy dtype)
-       ▼
-  TinyTon MLIR           ← i32 ops or f32 ops
-       │
-       ├──→ RegisterAlloc + CodeGen → 16-bit binary → Simulator
-       │    (FADD/FMUL for f32, ADD/MUL for i32)
-       │
-       └──→ TinyTonToGPU → gpu.module + arith + llvm
-                 │  addi/addf depending on type
-                 ▼
-            PTX assembly  → CUDA driver API → real GPU
+       |  (KernelVisitor -- type inferred from numpy dtype)
+       v
+  TinyTon MLIR           <- i32 / f32 / f16 ops
+       |
+       +---> RegisterAlloc + CodeGen -> 16-bit binary -> Simulator
+       |    (HADD/HMUL for f16, FADD/FMUL for f32, ADD/MUL for i32)
+       |
+       +---> TinyTonToGPU -> gpu.module + arith + llvm
+                 |  addi/addf depending on type (f16/f32 both use addf)
+                 v
+            PTX assembly  -> CUDA driver API -> real GPU
 """)

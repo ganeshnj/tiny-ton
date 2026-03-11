@@ -1,6 +1,7 @@
 #include "tiny-ton/Runtime/Simulator.h"
 
 #include <cassert>
+#include <cmath>
 #include <cstring>
 
 namespace tinyton {
@@ -17,6 +18,75 @@ inline int32_t floatToReg(float f) {
   int32_t r;
   std::memcpy(&r, &f, 4);
   return r;
+}
+
+// --- Portable f16 <-> f32 conversion using IEEE 754 bit manipulation --------
+
+inline float halfToFloat(uint16_t h) {
+  uint32_t sign = static_cast<uint32_t>(h & 0x8000) << 16;
+  uint32_t exp = (h >> 10) & 0x1F;
+  uint32_t mant = h & 0x3FF;
+
+  if (exp == 0) {
+    if (mant == 0) {
+      // +/- zero
+      uint32_t bits = sign;
+      float f;
+      std::memcpy(&f, &bits, 4);
+      return f;
+    }
+    // Denormalized: convert to normalized f32
+    exp = 1;
+    while (!(mant & 0x400)) {
+      mant <<= 1;
+      exp--;
+    }
+    mant &= 0x3FF;
+    uint32_t bits = sign | ((exp + 127 - 15) << 23) | (mant << 13);
+    float f;
+    std::memcpy(&f, &bits, 4);
+    return f;
+  }
+  if (exp == 0x1F) {
+    // Inf or NaN
+    uint32_t bits = sign | 0x7F800000 | (mant << 13);
+    float f;
+    std::memcpy(&f, &bits, 4);
+    return f;
+  }
+  // Normalized
+  uint32_t bits = sign | ((exp + 127 - 15) << 23) | (mant << 13);
+  float f;
+  std::memcpy(&f, &bits, 4);
+  return f;
+}
+
+inline uint16_t floatToHalf(float f) {
+  uint32_t bits;
+  std::memcpy(&bits, &f, 4);
+  uint32_t sign = (bits >> 16) & 0x8000;
+  int32_t exp = ((bits >> 23) & 0xFF) - 127 + 15;
+  uint32_t mant = (bits >> 13) & 0x3FF;
+
+  if (((bits >> 23) & 0xFF) == 0xFF) {
+    return static_cast<uint16_t>(sign | 0x7C00 | (mant ? 0x200 : 0));
+  }
+  if (exp <= 0) {
+    return static_cast<uint16_t>(sign);
+  }
+  if (exp >= 0x1F) {
+    return static_cast<uint16_t>(sign | 0x7C00);
+  }
+  return static_cast<uint16_t>(sign | (exp << 10) | mant);
+}
+
+// f16 stored in low 16 bits of int32 register
+inline float regToHalf(int32_t r) {
+  return halfToFloat(static_cast<uint16_t>(r & 0xFFFF));
+}
+
+inline int32_t halfToReg(float f) {
+  return static_cast<int32_t>(floatToHalf(f));
 }
 
 } // namespace
@@ -144,15 +214,18 @@ void SimulatedGPU::run(int numBlocks, int threadsPerBlock) {
           break;
         case 0xE: { // Extended ops
           uint8_t subOp = (imm >> 4) & 0xF;
-          if (subOp == 0x00) {
+          switch (subOp) {
+          case 0x00: {
             // FCONST: next two words are hi16 and lo16 of IEEE 754 float
             assert(pc + 2 < (int)prog.size() && "FCONST: missing data words");
             uint32_t hi = static_cast<uint32_t>(prog[pc + 1]) << 16;
             uint32_t lo = static_cast<uint32_t>(prog[pc + 2]);
             uint32_t bits = hi | lo;
             std::memcpy(&regs[rd], &bits, 4);
-            pc += 2; // skip the two data words
-          } else if (subOp == 0x01) {
+            pc += 2;
+            break;
+          }
+          case 0x01: {
             // FDIV: next word has rs|rt
             assert(pc + 1 < (int)prog.size() && "FDIV: missing operand word");
             uint16_t operands = prog[pc + 1];
@@ -162,9 +235,12 @@ void SimulatedGPU::run(int numBlocks, int threadsPerBlock) {
             float b = regToFloat(regs[frt]);
             regs[rd] = floatToReg(a / b);
             pc += 1;
-          } else if (subOp == 0x02) {
+            break;
+          }
+          case 0x02: {
             // FCMP_LT: next word has rs|rt
-            assert(pc + 1 < (int)prog.size() && "FCMP_LT: missing operand word");
+            assert(pc + 1 < (int)prog.size() &&
+                   "FCMP_LT: missing operand word");
             uint16_t operands = prog[pc + 1];
             uint8_t frs = (operands >> 4) & 0xF;
             uint8_t frt = operands & 0xF;
@@ -172,6 +248,79 @@ void SimulatedGPU::run(int numBlocks, int threadsPerBlock) {
             float b = regToFloat(regs[frt]);
             regs[rd] = (a < b) ? 1 : 0;
             pc += 1;
+            break;
+          }
+          case 0x03: {
+            // HCONST: next word is the 16-bit f16 value
+            assert(pc + 1 < (int)prog.size() && "HCONST: missing data word");
+            uint16_t hbits = prog[pc + 1];
+            regs[rd] = static_cast<int32_t>(hbits);
+            pc += 1;
+            break;
+          }
+          case 0x04: {
+            // HADD: next word has rs|rt
+            assert(pc + 1 < (int)prog.size() && "HADD: missing operand word");
+            uint16_t operands = prog[pc + 1];
+            uint8_t hrs = (operands >> 4) & 0xF;
+            uint8_t hrt = operands & 0xF;
+            float a = regToHalf(regs[hrs]);
+            float b = regToHalf(regs[hrt]);
+            regs[rd] = halfToReg(a + b);
+            pc += 1;
+            break;
+          }
+          case 0x05: {
+            // HSUB: next word has rs|rt
+            assert(pc + 1 < (int)prog.size() && "HSUB: missing operand word");
+            uint16_t operands = prog[pc + 1];
+            uint8_t hrs = (operands >> 4) & 0xF;
+            uint8_t hrt = operands & 0xF;
+            float a = regToHalf(regs[hrs]);
+            float b = regToHalf(regs[hrt]);
+            regs[rd] = halfToReg(a - b);
+            pc += 1;
+            break;
+          }
+          case 0x06: {
+            // HMUL: next word has rs|rt
+            assert(pc + 1 < (int)prog.size() && "HMUL: missing operand word");
+            uint16_t operands = prog[pc + 1];
+            uint8_t hrs = (operands >> 4) & 0xF;
+            uint8_t hrt = operands & 0xF;
+            float a = regToHalf(regs[hrs]);
+            float b = regToHalf(regs[hrt]);
+            regs[rd] = halfToReg(a * b);
+            pc += 1;
+            break;
+          }
+          case 0x07: {
+            // HDIV: next word has rs|rt
+            assert(pc + 1 < (int)prog.size() && "HDIV: missing operand word");
+            uint16_t operands = prog[pc + 1];
+            uint8_t hrs = (operands >> 4) & 0xF;
+            uint8_t hrt = operands & 0xF;
+            float a = regToHalf(regs[hrs]);
+            float b = regToHalf(regs[hrt]);
+            regs[rd] = halfToReg(a / b);
+            pc += 1;
+            break;
+          }
+          case 0x08: {
+            // HCMP_LT: next word has rs|rt
+            assert(pc + 1 < (int)prog.size() &&
+                   "HCMP_LT: missing operand word");
+            uint16_t operands = prog[pc + 1];
+            uint8_t hrs = (operands >> 4) & 0xF;
+            uint8_t hrt = operands & 0xF;
+            float a = regToHalf(regs[hrs]);
+            float b = regToHalf(regs[hrt]);
+            regs[rd] = (a < b) ? 1 : 0;
+            pc += 1;
+            break;
+          }
+          default:
+            break;
           }
           break;
         }

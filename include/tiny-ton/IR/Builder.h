@@ -1,5 +1,7 @@
 #pragma once
 
+#include "tiny-ton/IR/ElementType.h"
+
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Value.h"
@@ -19,8 +21,9 @@ public:
 
   mlir::Value emitConst(int64_t val);
   mlir::Value emitFConst(double val);
+  mlir::Value emitHConst(double val);
   mlir::Value emitArg(int64_t index, bool isPointer = false,
-                      bool isFloat = false);
+                      ElementType elemType = ElementType::I32);
   mlir::Value emitProgramId(int64_t axis);
   mlir::Value emitThreadId(int64_t axis);
 
@@ -31,7 +34,7 @@ public:
   mlir::Value emitCmpLt(mlir::Value lhs, mlir::Value rhs);
 
   mlir::Value emitLoad(mlir::Value addr, mlir::Value mask = {},
-                       bool isFloat = false);
+                       ElementType elemType = ElementType::I32);
   void emitStore(mlir::Value addr, mlir::Value val, mlir::Value mask = {});
 
   void emitBranchZero(mlir::Value cond, int64_t skip);

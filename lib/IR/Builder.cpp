@@ -45,19 +45,33 @@ mlir::Value IRBuilder::emitFConst(double val) {
       .getResult();
 }
 
-mlir::Value IRBuilder::emitArg(int64_t index, bool isPointer, bool isFloat) {
+mlir::Value IRBuilder::emitHConst(double val) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto f16Ty = impl_->builder->getF16Type();
+  // Store as f32 attr; the op result type is f16.
+  auto attr = impl_->builder->getF32FloatAttr(static_cast<float>(val));
+  return impl_->builder->create<tinyton::HConstOp>(loc, f16Ty, attr)
+      .getResult();
+}
+
+mlir::Value IRBuilder::emitArg(int64_t index, bool isPointer,
+                               ElementType elemType) {
   auto loc = mlir::UnknownLoc::get(&impl_->context);
   // Pointer args are always i32 (addresses). Only non-pointer scalar args
-  // use f32 result type. The is_float flag on pointer args indicates the
-  // pointed-to element type, used by the GPU lowering for GEP/load/store.
-  mlir::Type resTy = (!isPointer && isFloat)
-                         ? (mlir::Type)impl_->builder->getF32Type()
-                         : (mlir::Type)impl_->builder->getI32Type();
+  // use the actual element type as result. The elem_type attr on pointer args
+  // records the pointed-to element type for GPU lowering.
+  mlir::Type resTy;
+  if (isPointer)
+    resTy = impl_->builder->getI32Type();
+  else
+    resTy = elementTypeToMLIR(elemType, &impl_->context);
+
   auto indexAttr = impl_->builder->getI32IntegerAttr(index);
   auto ptrAttr = impl_->builder->getBoolAttr(isPointer);
-  auto floatAttr = impl_->builder->getBoolAttr(isFloat);
+  auto etAttr =
+      impl_->builder->getI32IntegerAttr(static_cast<int64_t>(elemType));
   return impl_->builder
-      ->create<tinyton::ArgOp>(loc, resTy, indexAttr, ptrAttr, floatAttr)
+      ->create<tinyton::ArgOp>(loc, resTy, indexAttr, ptrAttr, etAttr)
       .getResult();
 }
 
@@ -113,10 +127,9 @@ mlir::Value IRBuilder::emitCmpLt(mlir::Value lhs, mlir::Value rhs) {
 }
 
 mlir::Value IRBuilder::emitLoad(mlir::Value addr, mlir::Value mask,
-                                bool isFloat) {
+                                ElementType elemType) {
   auto loc = mlir::UnknownLoc::get(&impl_->context);
-  mlir::Type resTy = isFloat ? (mlir::Type)impl_->builder->getF32Type()
-                             : (mlir::Type)impl_->builder->getI32Type();
+  mlir::Type resTy = elementTypeToMLIR(elemType, &impl_->context);
   return impl_->builder->create<tinyton::LoadOp>(loc, resTy, addr, mask)
       .getResult();
 }

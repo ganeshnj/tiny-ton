@@ -10,8 +10,8 @@ include "mlir/Interfaces/SideEffectInterfaces.td"
 class TinyTon_Op<string mnemonic, list<Trait> traits = []>
     : Op<TinyTon_Dialect, mnemonic, traits>;
 
-// Scalar element type: integer or float.
-def TinyTon_ScalarType : AnyTypeOf<[I32, F32]>;
+// Scalar element type: integer or float (32-bit or 16-bit).
+def TinyTon_ScalarType : AnyTypeOf<[I32, F32, F16]>;
 
 // --- Arithmetic ------------------------------------------------------------
 
@@ -67,21 +67,29 @@ def TinyTon_ConstOp : TinyTon_Op<"const", [Pure]> {
 }
 
 def TinyTon_FConstOp : TinyTon_Op<"fconst", [Pure]> {
-  let summary = "Materialize a float immediate value.";
+  let summary = "Materialize a float32 immediate value.";
   let arguments = (ins F32Attr:$value);
   let results = (outs F32:$result);
   let assemblyFormat = "$value attr-dict";
 }
 
+def TinyTon_HConstOp : TinyTon_Op<"hconst", [Pure]> {
+  let summary = "Materialize a float16 immediate value.";
+  let arguments = (ins F32Attr:$value);
+  let results = (outs F16:$result);
+  let assemblyFormat = "$value attr-dict";
+}
+
 // --- Kernel arguments ------------------------------------------------------
 
+// elem_type: 0 = i32, 1 = f32, 2 = f16 (matches ElementType enum)
 def TinyTon_ArgOp : TinyTon_Op<"arg", [Pure]> {
   let summary = "Load a kernel argument by index.";
   let arguments = (ins I32Attr:$index,
                        DefaultValuedAttr<BoolAttr, "false">:$is_pointer,
-                       DefaultValuedAttr<BoolAttr, "false">:$is_float);
+                       DefaultValuedAttr<I32Attr, "0">:$elem_type);
   let results = (outs TinyTon_ScalarType:$result);
-  let assemblyFormat = "$index (`ptr` $is_pointer^)? (`f32` $is_float^)? attr-dict `:` type($result)";
+  let assemblyFormat = "$index (`ptr` $is_pointer^)? attr-dict `:` type($result)";
 }
 
 // --- Thread identification -------------------------------------------------

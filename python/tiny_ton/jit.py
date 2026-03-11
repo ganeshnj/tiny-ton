@@ -16,8 +16,12 @@ _BUILTINS = {"program_id", "arange", "load", "store"}
 # Module aliases that should be treated as the tiny_ton namespace.
 _MODULE_ALIASES = {"tt", "tiny_ton"}
 
-# Numpy dtypes we support.
-_FLOAT_DTYPES = {np.dtype("float32")}
+# Map numpy dtypes to tiny-ton dtype strings.
+_DTYPE_MAP = {
+    np.dtype("int32"): "i32",
+    np.dtype("float32"): "f32",
+    np.dtype("float16"): "f16",
+}
 
 
 class KernelVisitor(ast.NodeVisitor):
@@ -25,18 +29,22 @@ class KernelVisitor(ast.NodeVisitor):
 
     def __init__(self, builder, param_names: list[str],
                  arg_is_pointer: Optional[list[bool]] = None,
-                 arg_is_float: Optional[list[bool]] = None):
+                 arg_dtypes: Optional[list[str]] = None):
         self.builder = builder
         self.symbols: dict[str, Any] = {}
         self.block_size: Optional[int] = None
-        self._arg_is_float = arg_is_float or []
-        self._any_float = any(self._arg_is_float)
+        self._arg_dtypes = arg_dtypes or []
+        self._kernel_dtype = "i32"
+        for d in self._arg_dtypes:
+            if d in ("f32", "f16"):
+                self._kernel_dtype = d
+                break
 
         for i, name in enumerate(param_names):
             is_ptr = arg_is_pointer[i] if arg_is_pointer else False
-            is_f = arg_is_float[i] if arg_is_float else False
+            dtype = arg_dtypes[i] if arg_dtypes else "i32"
             self.symbols[name] = builder.emit_arg(i, is_pointer=is_ptr,
-                                                  is_float=is_f)
+                                                  dtype=dtype)
 
     # ------------------------------------------------------------------
     # Statements
@@ -65,6 +73,8 @@ class KernelVisitor(ast.NodeVisitor):
         if isinstance(node, ast.Constant):
             val = node.value
             if isinstance(val, float):
+                if self._kernel_dtype == "f16":
+                    return self.builder.emit_hconst(val)
                 return self.builder.emit_fconst(val)
             return self.builder.emit_const(int(val))
 
@@ -121,7 +131,7 @@ class KernelVisitor(ast.NodeVisitor):
             addr = self._eval(node.args[0])
             mask = self._get_kwarg(node, "mask")
             return self.builder.emit_load(addr, mask=mask,
-                                          is_float=self._any_float)
+                                          dtype=self._kernel_dtype)
 
         if builtin == "store":
             addr = self._eval(node.args[0])
@@ -185,10 +195,18 @@ class JITFunction:
 
         param_names = [a.arg for a in func_def.args.args]
         arg_is_pointer = [isinstance(a, np.ndarray) for a in args]
-        arg_is_float = [
-            isinstance(a, np.ndarray) and a.dtype in _FLOAT_DTYPES
-            for a in args
-        ]
+        arg_dtypes = []
+        for a in args:
+            if isinstance(a, np.ndarray) and a.dtype in _DTYPE_MAP:
+                arg_dtypes.append(_DTYPE_MAP[a.dtype])
+            else:
+                arg_dtypes.append("i32")
+
+        kernel_dtype = "i32"
+        for d in arg_dtypes:
+            if d in ("f32", "f16"):
+                kernel_dtype = d
+                break
 
         use_cuda = core.has_cuda()
 
@@ -196,11 +214,10 @@ class JITFunction:
         builder.begin_function(func_def.name)
 
         visitor = KernelVisitor(builder, param_names, arg_is_pointer,
-                                arg_is_float)
+                                arg_dtypes)
         visitor.visit(func_def)
 
         block_size = visitor.block_size or 1
-        any_float = any(arg_is_float)
 
         if use_cuda:
             sm = os.environ.get("TTN_SM_VERSION", "sm_87")
@@ -212,7 +229,7 @@ class JITFunction:
                 "ptx": nvptx_result.ptx,
                 "kernel_name": nvptx_result.kernel_name,
                 "block_size": block_size,
-                "is_float": any_float,
+                "kernel_dtype": kernel_dtype,
             }
 
         result = builder.compile()
@@ -221,7 +238,7 @@ class JITFunction:
             "backend": "simulator",
             "binary": result.get_binary(),
             "block_size": block_size,
-            "is_float": any_float,
+            "kernel_dtype": kernel_dtype,
         }
 
     def _launch(self, compiled, grid: tuple, args: tuple):
@@ -271,7 +288,7 @@ class JITFunction:
         binary = compiled["binary"]
         block_size = compiled["block_size"]
         num_blocks = grid[0] if grid else 1
-        is_float = compiled.get("is_float", False)
+        kernel_dtype = compiled.get("kernel_dtype", "i32")
 
         total_elements = 0
         for a in args:
@@ -288,9 +305,12 @@ class JITFunction:
         for a in args:
             if isinstance(a, np.ndarray):
                 flat = a.flatten()
-                # Store bit pattern as int32 for the simulator's memory
                 if flat.dtype == np.float32:
                     data = flat.view(np.int32).tolist()
+                elif flat.dtype == np.float16:
+                    # Each f16 value stored as its 16-bit pattern zero-extended
+                    # to 32 bits (one value per memory word).
+                    data = flat.view(np.uint16).astype(np.int32).tolist()
                 else:
                     data = flat.astype(np.int32).tolist()
                 sim.write_memory(next_addr, data)
@@ -310,6 +330,10 @@ class JITFunction:
             result = sim.read_memory(base_addr, count)
             if arr.dtype == np.float32:
                 arr.flat[:] = np.array(result, dtype=np.int32).view(np.float32)
+            elif arr.dtype == np.float16:
+                # Extract low 16 bits and reinterpret as f16.
+                raw = np.array(result, dtype=np.uint32).astype(np.uint16)
+                arr.flat[:] = raw.view(np.float16)
             else:
                 arr.flat[:] = result
 

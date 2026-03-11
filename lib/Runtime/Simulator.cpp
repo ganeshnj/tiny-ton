@@ -5,6 +5,22 @@
 
 namespace tinyton {
 
+namespace {
+
+inline float regToFloat(int32_t r) {
+  float f;
+  std::memcpy(&f, &r, 4);
+  return f;
+}
+
+inline int32_t floatToReg(float f) {
+  int32_t r;
+  std::memcpy(&r, &f, 4);
+  return r;
+}
+
+} // namespace
+
 struct SimulatedGPU::Impl {
   std::vector<uint16_t> program;
   std::vector<int32_t> memory;
@@ -66,6 +82,24 @@ void SimulatedGPU::run(int numBlocks, int threadsPerBlock) {
         uint8_t imm = inst & 0xFF;
 
         switch (opcode) {
+        case 0x0: { // FADD
+          float a = regToFloat(regs[rs]);
+          float b = regToFloat(regs[rt]);
+          regs[rd] = floatToReg(a + b);
+          break;
+        }
+        case 0x1: { // FSUB
+          float a = regToFloat(regs[rs]);
+          float b = regToFloat(regs[rt]);
+          regs[rd] = floatToReg(a - b);
+          break;
+        }
+        case 0x2: { // FMUL
+          float a = regToFloat(regs[rs]);
+          float b = regToFloat(regs[rt]);
+          regs[rd] = floatToReg(a * b);
+          break;
+        }
         case 0x3: // ADD
           regs[rd] = regs[rs] + regs[rt];
           break;
@@ -108,6 +142,39 @@ void SimulatedGPU::run(int numBlocks, int threadsPerBlock) {
             pc += imm;
           }
           break;
+        case 0xE: { // Extended ops
+          uint8_t subOp = (imm >> 4) & 0xF;
+          if (subOp == 0x00) {
+            // FCONST: next two words are hi16 and lo16 of IEEE 754 float
+            assert(pc + 2 < (int)prog.size() && "FCONST: missing data words");
+            uint32_t hi = static_cast<uint32_t>(prog[pc + 1]) << 16;
+            uint32_t lo = static_cast<uint32_t>(prog[pc + 2]);
+            uint32_t bits = hi | lo;
+            std::memcpy(&regs[rd], &bits, 4);
+            pc += 2; // skip the two data words
+          } else if (subOp == 0x01) {
+            // FDIV: next word has rs|rt
+            assert(pc + 1 < (int)prog.size() && "FDIV: missing operand word");
+            uint16_t operands = prog[pc + 1];
+            uint8_t frs = (operands >> 4) & 0xF;
+            uint8_t frt = operands & 0xF;
+            float a = regToFloat(regs[frs]);
+            float b = regToFloat(regs[frt]);
+            regs[rd] = floatToReg(a / b);
+            pc += 1;
+          } else if (subOp == 0x02) {
+            // FCMP_LT: next word has rs|rt
+            assert(pc + 1 < (int)prog.size() && "FCMP_LT: missing operand word");
+            uint16_t operands = prog[pc + 1];
+            uint8_t frs = (operands >> 4) & 0xF;
+            uint8_t frt = operands & 0xF;
+            float a = regToFloat(regs[frs]);
+            float b = regToFloat(regs[frt]);
+            regs[rd] = (a < b) ? 1 : 0;
+            pc += 1;
+          }
+          break;
+        }
         case 0xF: // RET
           goto thread_done;
         default:

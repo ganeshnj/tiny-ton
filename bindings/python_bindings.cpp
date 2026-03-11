@@ -36,11 +36,17 @@ PYBIND11_MODULE(_tiny_ton_core, m) {
            [](tinyton::IRBuilder &self, int64_t val) {
              return PyValue{self.emitConst(val)};
            })
+      .def("emit_fconst",
+           [](tinyton::IRBuilder &self, double val) {
+             return PyValue{self.emitFConst(val)};
+           })
       .def("emit_arg",
-           [](tinyton::IRBuilder &self, int64_t index, bool isPointer) {
-             return PyValue{self.emitArg(index, isPointer)};
+           [](tinyton::IRBuilder &self, int64_t index, bool isPointer,
+              bool isFloat) {
+             return PyValue{self.emitArg(index, isPointer, isFloat)};
            },
-           py::arg("index"), py::arg("is_pointer") = false)
+           py::arg("index"), py::arg("is_pointer") = false,
+           py::arg("is_float") = false)
       .def("emit_program_id",
            [](tinyton::IRBuilder &self, int64_t axis) {
              return PyValue{self.emitProgramId(axis)};
@@ -61,18 +67,24 @@ PYBIND11_MODULE(_tiny_ton_core, m) {
            [](tinyton::IRBuilder &self, PyValue lhs, PyValue rhs) {
              return PyValue{self.emitMul(lhs.val, rhs.val)};
            })
+      .def("emit_div",
+           [](tinyton::IRBuilder &self, PyValue lhs, PyValue rhs) {
+             return PyValue{self.emitDiv(lhs.val, rhs.val)};
+           })
       .def("emit_cmp_lt",
            [](tinyton::IRBuilder &self, PyValue lhs, PyValue rhs) {
              return PyValue{self.emitCmpLt(lhs.val, rhs.val)};
            })
       .def("emit_load",
-           [](tinyton::IRBuilder &self, PyValue addr, py::object mask) {
+           [](tinyton::IRBuilder &self, PyValue addr, py::object mask,
+              bool isFloat) {
              mlir::Value maskVal;
              if (!mask.is_none())
                maskVal = mask.cast<PyValue>().val;
-             return PyValue{self.emitLoad(addr.val, maskVal)};
+             return PyValue{self.emitLoad(addr.val, maskVal, isFloat)};
            },
-           py::arg("addr"), py::arg("mask") = py::none())
+           py::arg("addr"), py::arg("mask") = py::none(),
+           py::arg("is_float") = false)
       .def("emit_store",
            [](tinyton::IRBuilder &self, PyValue addr, PyValue val,
               py::object mask) {

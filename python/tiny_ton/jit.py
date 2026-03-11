@@ -16,19 +16,27 @@ _BUILTINS = {"program_id", "arange", "load", "store"}
 # Module aliases that should be treated as the tiny_ton namespace.
 _MODULE_ALIASES = {"tt", "tiny_ton"}
 
+# Numpy dtypes we support.
+_FLOAT_DTYPES = {np.dtype("float32")}
+
 
 class KernelVisitor(ast.NodeVisitor):
     """Walks a Python AST and emits TinyTon IR via the C++ IRBuilder."""
 
     def __init__(self, builder, param_names: list[str],
-                 arg_is_pointer: Optional[list[bool]] = None):
+                 arg_is_pointer: Optional[list[bool]] = None,
+                 arg_is_float: Optional[list[bool]] = None):
         self.builder = builder
         self.symbols: dict[str, Any] = {}
         self.block_size: Optional[int] = None
+        self._arg_is_float = arg_is_float or []
+        self._any_float = any(self._arg_is_float)
 
         for i, name in enumerate(param_names):
             is_ptr = arg_is_pointer[i] if arg_is_pointer else False
-            self.symbols[name] = builder.emit_arg(i, is_pointer=is_ptr)
+            is_f = arg_is_float[i] if arg_is_float else False
+            self.symbols[name] = builder.emit_arg(i, is_pointer=is_ptr,
+                                                  is_float=is_f)
 
     # ------------------------------------------------------------------
     # Statements
@@ -55,7 +63,10 @@ class KernelVisitor(ast.NodeVisitor):
 
     def _eval(self, node: ast.expr):
         if isinstance(node, ast.Constant):
-            return self.builder.emit_const(int(node.value))
+            val = node.value
+            if isinstance(val, float):
+                return self.builder.emit_fconst(val)
+            return self.builder.emit_const(int(val))
 
         if isinstance(node, ast.Name):
             assert node.id in self.symbols, f"undefined: {node.id}"
@@ -70,6 +81,8 @@ class KernelVisitor(ast.NodeVisitor):
                 return self.builder.emit_sub(lhs, rhs)
             if isinstance(node.op, ast.Mult):
                 return self.builder.emit_mul(lhs, rhs)
+            if isinstance(node.op, ast.Div):
+                return self.builder.emit_div(lhs, rhs)
             raise NotImplementedError(f"unsupported binop: {type(node.op)}")
 
         if isinstance(node, ast.Compare):
@@ -107,7 +120,8 @@ class KernelVisitor(ast.NodeVisitor):
         if builtin == "load":
             addr = self._eval(node.args[0])
             mask = self._get_kwarg(node, "mask")
-            return self.builder.emit_load(addr, mask=mask)
+            return self.builder.emit_load(addr, mask=mask,
+                                          is_float=self._any_float)
 
         if builtin == "store":
             addr = self._eval(node.args[0])
@@ -171,16 +185,22 @@ class JITFunction:
 
         param_names = [a.arg for a in func_def.args.args]
         arg_is_pointer = [isinstance(a, np.ndarray) for a in args]
+        arg_is_float = [
+            isinstance(a, np.ndarray) and a.dtype in _FLOAT_DTYPES
+            for a in args
+        ]
 
         use_cuda = core.has_cuda()
 
         builder = core.IRBuilder()
         builder.begin_function(func_def.name)
 
-        visitor = KernelVisitor(builder, param_names, arg_is_pointer)
+        visitor = KernelVisitor(builder, param_names, arg_is_pointer,
+                                arg_is_float)
         visitor.visit(func_def)
 
         block_size = visitor.block_size or 1
+        any_float = any(arg_is_float)
 
         if use_cuda:
             sm = os.environ.get("TTN_SM_VERSION", "sm_87")
@@ -192,6 +212,7 @@ class JITFunction:
                 "ptx": nvptx_result.ptx,
                 "kernel_name": nvptx_result.kernel_name,
                 "block_size": block_size,
+                "is_float": any_float,
             }
 
         result = builder.compile()
@@ -200,6 +221,7 @@ class JITFunction:
             "backend": "simulator",
             "binary": result.get_binary(),
             "block_size": block_size,
+            "is_float": any_float,
         }
 
     def _launch(self, compiled, grid: tuple, args: tuple):
@@ -221,7 +243,7 @@ class JITFunction:
         kernel_args = []
         for a in args:
             if isinstance(a, np.ndarray):
-                flat = np.ascontiguousarray(a.flatten(), dtype=np.int32)
+                flat = np.ascontiguousarray(a.flatten())
                 nbytes = flat.nbytes
                 dptr = rt.alloc(nbytes)
                 rt.copy_to_device(dptr, flat)
@@ -236,7 +258,7 @@ class JITFunction:
                       num_blocks, block_size, kernel_args)
 
             for dptr, nbytes, arr in array_mappings:
-                flat = np.empty(arr.size, dtype=np.int32)
+                flat = np.empty(arr.size, dtype=arr.dtype)
                 rt.copy_from_device(flat, dptr, nbytes)
                 arr.flat[:] = flat
         finally:
@@ -249,6 +271,7 @@ class JITFunction:
         binary = compiled["binary"]
         block_size = compiled["block_size"]
         num_blocks = grid[0] if grid else 1
+        is_float = compiled.get("is_float", False)
 
         total_elements = 0
         for a in args:
@@ -264,8 +287,12 @@ class JITFunction:
 
         for a in args:
             if isinstance(a, np.ndarray):
-                flat = a.flatten().astype(np.int32)
-                data = flat.tolist()
+                flat = a.flatten()
+                # Store bit pattern as int32 for the simulator's memory
+                if flat.dtype == np.float32:
+                    data = flat.view(np.int32).tolist()
+                else:
+                    data = flat.astype(np.int32).tolist()
                 sim.write_memory(next_addr, data)
                 array_mappings.append((next_addr, len(data), a))
                 kernel_args.append(next_addr)
@@ -281,7 +308,10 @@ class JITFunction:
 
         for base_addr, count, arr in array_mappings:
             result = sim.read_memory(base_addr, count)
-            arr.flat[:] = result
+            if arr.dtype == np.float32:
+                arr.flat[:] = np.array(result, dtype=np.int32).view(np.float32)
+            else:
+                arr.flat[:] = result
 
 
 def jit(fn):

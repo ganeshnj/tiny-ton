@@ -10,44 +10,66 @@ include "mlir/Interfaces/SideEffectInterfaces.td"
 class TinyTon_Op<string mnemonic, list<Trait> traits = []>
     : Op<TinyTon_Dialect, mnemonic, traits>;
 
+// Scalar element type: integer or float.
+def TinyTon_ScalarType : AnyTypeOf<[I32, F32]>;
+
 // --- Arithmetic ------------------------------------------------------------
 
-def TinyTon_AddOp : TinyTon_Op<"add", [Pure, Commutative]> {
-  let summary = "Integer addition.";
-  let arguments = (ins I32:$lhs, I32:$rhs);
-  let results = (outs I32:$result);
+def TinyTon_AddOp : TinyTon_Op<"add",
+    [Pure, Commutative, AllTypesMatch<["lhs", "rhs", "result"]>]> {
+  let summary = "Addition (integer or float).";
+  let arguments = (ins TinyTon_ScalarType:$lhs, TinyTon_ScalarType:$rhs);
+  let results = (outs TinyTon_ScalarType:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
 }
 
-def TinyTon_SubOp : TinyTon_Op<"sub", [Pure]> {
-  let summary = "Integer subtraction.";
-  let arguments = (ins I32:$lhs, I32:$rhs);
-  let results = (outs I32:$result);
+def TinyTon_SubOp : TinyTon_Op<"sub",
+    [Pure, AllTypesMatch<["lhs", "rhs", "result"]>]> {
+  let summary = "Subtraction (integer or float).";
+  let arguments = (ins TinyTon_ScalarType:$lhs, TinyTon_ScalarType:$rhs);
+  let results = (outs TinyTon_ScalarType:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
 }
 
-def TinyTon_MulOp : TinyTon_Op<"mul", [Pure, Commutative]> {
-  let summary = "Integer multiplication.";
-  let arguments = (ins I32:$lhs, I32:$rhs);
-  let results = (outs I32:$result);
+def TinyTon_MulOp : TinyTon_Op<"mul",
+    [Pure, Commutative, AllTypesMatch<["lhs", "rhs", "result"]>]> {
+  let summary = "Multiplication (integer or float).";
+  let arguments = (ins TinyTon_ScalarType:$lhs, TinyTon_ScalarType:$rhs);
+  let results = (outs TinyTon_ScalarType:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
+}
+
+def TinyTon_DivOp : TinyTon_Op<"div",
+    [Pure, AllTypesMatch<["lhs", "rhs", "result"]>]> {
+  let summary = "Division (float only for now).";
+  let arguments = (ins TinyTon_ScalarType:$lhs, TinyTon_ScalarType:$rhs);
+  let results = (outs TinyTon_ScalarType:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
 }
 
 // --- Comparison ------------------------------------------------------------
 
-def TinyTon_CmpLtOp : TinyTon_Op<"cmp_lt", [Pure]> {
-  let summary = "Integer less-than comparison. Returns 1 if lhs < rhs, else 0.";
-  let arguments = (ins I32:$lhs, I32:$rhs);
+def TinyTon_CmpLtOp : TinyTon_Op<"cmp_lt",
+    [Pure, AllTypesMatch<["lhs", "rhs"]>]> {
+  let summary = "Less-than comparison. Returns i32 1/0.";
+  let arguments = (ins TinyTon_ScalarType:$lhs, TinyTon_ScalarType:$rhs);
   let results = (outs I32:$result);
-  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs)";
 }
 
 // --- Constants -------------------------------------------------------------
 
 def TinyTon_ConstOp : TinyTon_Op<"const", [Pure]> {
-  let summary = "Materialize an immediate value.";
+  let summary = "Materialize an integer immediate value.";
   let arguments = (ins I32Attr:$value);
   let results = (outs I32:$result);
+  let assemblyFormat = "$value attr-dict";
+}
+
+def TinyTon_FConstOp : TinyTon_Op<"fconst", [Pure]> {
+  let summary = "Materialize a float immediate value.";
+  let arguments = (ins F32Attr:$value);
+  let results = (outs F32:$result);
   let assemblyFormat = "$value attr-dict";
 }
 
@@ -56,9 +78,10 @@ def TinyTon_ConstOp : TinyTon_Op<"const", [Pure]> {
 def TinyTon_ArgOp : TinyTon_Op<"arg", [Pure]> {
   let summary = "Load a kernel argument by index.";
   let arguments = (ins I32Attr:$index,
-                       DefaultValuedAttr<BoolAttr, "false">:$is_pointer);
-  let results = (outs I32:$result);
-  let assemblyFormat = "$index (`ptr` $is_pointer^)? attr-dict";
+                       DefaultValuedAttr<BoolAttr, "false">:$is_pointer,
+                       DefaultValuedAttr<BoolAttr, "false">:$is_float);
+  let results = (outs TinyTon_ScalarType:$result);
+  let assemblyFormat = "$index (`ptr` $is_pointer^)? (`f32` $is_float^)? attr-dict `:` type($result)";
 }
 
 // --- Thread identification -------------------------------------------------
@@ -82,15 +105,15 @@ def TinyTon_ThreadIdOp : TinyTon_Op<"thread_id", [Pure]> {
 def TinyTon_LoadOp : TinyTon_Op<"load", []> {
   let summary = "Load a value from data memory.";
   let arguments = (ins I32:$addr, Optional<I32>:$mask);
-  let results = (outs I32:$result);
+  let results = (outs TinyTon_ScalarType:$result);
   let assemblyFormat = "$addr (`,` $mask^)? attr-dict `:` type($result)";
 }
 
 def TinyTon_StoreOp : TinyTon_Op<"store", []> {
   let summary = "Store a value to data memory.";
-  let arguments = (ins I32:$addr, I32:$value, Optional<I32>:$mask);
+  let arguments = (ins I32:$addr, TinyTon_ScalarType:$value, Optional<I32>:$mask);
   let results = (outs);
-  let assemblyFormat = "$addr `,` $value (`,` $mask^)? attr-dict `:` type($addr)";
+  let assemblyFormat = "$addr `,` $value (`,` $mask^)? attr-dict `:` type($value)";
 }
 
 // --- Control flow ----------------------------------------------------------

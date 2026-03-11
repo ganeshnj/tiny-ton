@@ -10,7 +10,7 @@ import textwrap
 import numpy as np
 import _tiny_ton_core as core
 import tiny_ton as tt
-from tiny_ton.jit import KernelVisitor
+from tiny_ton.jit import KernelVisitor, _FLOAT_DTYPES
 
 SM_VERSION = os.environ.get("TTN_SM_VERSION", "sm_87")
 
@@ -45,109 +45,109 @@ tree = ast.parse(source)
 print(ast.dump(tree, indent=2)[:1500], "...\n")
 
 
-# ── Stage 2: TinyTon MLIR (our dialect) ──────────────────────
+def run_pipeline(label, args):
+    """Run the full pipeline for a given set of arguments."""
+    func_def = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            func_def = node
+            break
 
-separator("STAGE 2: TinyTon MLIR (our dialect)")
+    param_names = [a.arg for a in func_def.args.args]
+    arg_is_pointer = [isinstance(a, np.ndarray) for a in args]
+    arg_is_float = [
+        isinstance(a, np.ndarray) and a.dtype in _FLOAT_DTYPES
+        for a in args
+    ]
 
-args = (np.zeros(256, np.int32), np.zeros(256, np.int32),
-        np.zeros(256, np.int32), 256)
+    # -- MLIR --
+    separator(f"STAGE 2: TinyTon MLIR ({label})")
+    builder = core.IRBuilder()
+    builder.begin_function(func_def.name)
+    visitor = KernelVisitor(builder, param_names, arg_is_pointer, arg_is_float)
+    visitor.visit(func_def)
+    print(builder.dump_mlir())
 
-func_def = None
-for node in ast.walk(tree):
-    if isinstance(node, ast.FunctionDef):
-        func_def = node
-        break
+    # -- Simulator assembly --
+    separator(f"STAGE 3: Simulator Assembly ({label})")
+    result = builder.compile()
+    assert result.success, result.error
+    print(result.output)
 
-param_names = [a.arg for a in func_def.args.args]
-arg_is_pointer = [isinstance(a, np.ndarray) for a in args]
-
-builder = core.IRBuilder()
-builder.begin_function(func_def.name)
-
-visitor = KernelVisitor(builder, param_names, arg_is_pointer)
-visitor.visit(func_def)
-
-mlir_ir = builder.dump_mlir()
-print(mlir_ir)
-
-
-# ── Stage 3: Simulator assembly (16-bit ISA) ────────────────
-
-separator("STAGE 3: Simulator Assembly (16-bit ISA)")
-result = builder.compile()
-assert result.success, result.error
-print(result.output)
-
-
-# ── Stage 4: Simulator binary (hex) ─────────────────────────
-
-separator("STAGE 4: Simulator Binary (hex)")
-binary = result.get_binary()
-for i, inst in enumerate(binary[:10]):
-    print(f"  [{i:2d}]  0x{inst:04X}")
-if len(binary) > 10:
-    print(f"  ... ({len(binary)} instructions total)")
-
-
-# ── Stage 5: NVPTX / PTX ────────────────────────────────────
-
-separator(f"STAGE 5: NVPTX (PTX assembly for {SM_VERSION})")
-
-# Need a fresh builder since the module was consumed by compile()
-builder2 = core.IRBuilder()
-builder2.begin_function(func_def.name)
-visitor2 = KernelVisitor(builder2, param_names, arg_is_pointer)
-visitor2.visit(func_def)
-
-nvptx = builder2.compile_to_nvptx(sm_version=SM_VERSION)
-if nvptx.success:
-    print(nvptx.ptx)
-    print(f"  kernel_name: {nvptx.kernel_name}")
-else:
-    print(f"  PTX compilation failed: {nvptx.error}")
+    # -- PTX --
+    separator(f"STAGE 4: PTX for {SM_VERSION} ({label})")
+    builder2 = core.IRBuilder()
+    builder2.begin_function(func_def.name)
+    visitor2 = KernelVisitor(builder2, param_names, arg_is_pointer,
+                             arg_is_float)
+    visitor2.visit(func_def)
+    nvptx = builder2.compile_to_nvptx(sm_version=SM_VERSION)
+    if nvptx.success:
+        print(nvptx.ptx)
+    else:
+        print(f"  PTX compilation failed: {nvptx.error}")
 
 
-# ── Stage 6: Execute on simulator ───────────────────────────
+# ── i32 pipeline ────────────────────────────────────────────
 
-separator("STAGE 6: Execute on Simulator")
+i32_args = (np.zeros(256, np.int32), np.zeros(256, np.int32),
+            np.zeros(256, np.int32), 256)
+run_pipeline("i32", i32_args)
+
+# ── f32 pipeline ────────────────────────────────────────────
+
+f32_args = (np.zeros(256, np.float32), np.zeros(256, np.float32),
+            np.zeros(256, np.float32), 256)
+run_pipeline("f32", f32_args)
+
+
+# ── Execute on simulator (both types) ───────────────────────
+
+separator("STAGE 5: Execute i32 on Simulator")
 
 N = 256
-a = np.arange(N, dtype=np.int32)
-b = np.arange(N, dtype=np.int32)
-c = np.zeros(N, dtype=np.int32)
+a_i = np.arange(N, dtype=np.int32)
+b_i = np.arange(N, dtype=np.int32)
+c_i = np.zeros(N, dtype=np.int32)
+vector_add[(N // 64,)](a_i, b_i, c_i, N)
 
-grid = (N // 64,)
-vector_add[grid](a, b, c, N)
+print(f"  a[:8] = {a_i[:8]}")
+print(f"  b[:8] = {b_i[:8]}")
+print(f"  c[:8] = {c_i[:8]}")
+assert np.array_equal(c_i, a_i + b_i), "i32 FAIL!"
+print("  PASS")
 
-print(f"  a[:8] = {a[:8]}")
-print(f"  b[:8] = {b[:8]}")
-print(f"  c[:8] = {c[:8]}")
-expected = a + b
-if np.array_equal(c, expected):
-    print("  PASS")
-else:
-    print("  FAIL!")
-    print(f"  expected[:8] = {expected[:8]}")
+
+separator("STAGE 6: Execute f32 on Simulator")
+
+a_f = np.array([1.5, 2.5, 3.5, 0.1] * 64, dtype=np.float32)
+b_f = np.array([0.5, 0.5, 0.5, 0.9] * 64, dtype=np.float32)
+c_f = np.zeros(N, dtype=np.float32)
+vector_add[(N // 64,)](a_f, b_f, c_f, N)
+
+print(f"  a[:4] = {a_f[:4]}")
+print(f"  b[:4] = {b_f[:4]}")
+print(f"  c[:4] = {c_f[:4]}")
+assert np.allclose(c_f, a_f + b_f, atol=1e-6), "f32 FAIL!"
+print("  PASS")
 
 
 # ── Summary ─────────────────────────────────────────────────
 
 separator("Pipeline Summary")
-print("""  Python source
+print("""  Python source (same kernel code for i32 and f32!)
        │  (ast.parse)
        ▼
   Python AST
-       │  (KernelVisitor)
+       │  (KernelVisitor -- type inferred from numpy dtype)
        ▼
-  TinyTon MLIR           ← our custom dialect
+  TinyTon MLIR           ← i32 ops or f32 ops
        │
        ├──→ RegisterAlloc + CodeGen → 16-bit binary → Simulator
+       │    (FADD/FMUL for f32, ADD/MUL for i32)
        │
        └──→ TinyTonToGPU → gpu.module + arith + llvm
-                 │  (arith-to-llvm, gpu-to-nvvm, reconcile-casts)
-                 ▼
-            LLVM IR (nvptx64)
-                 │  (TargetMachine)
+                 │  addi/addf depending on type
                  ▼
             PTX assembly  → CUDA driver API → real GPU
 """)

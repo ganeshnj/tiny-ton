@@ -18,16 +18,20 @@ public:
   void beginFunction(const std::string &name);
 
   mlir::Value emitConst(int64_t val);
-  mlir::Value emitArg(int64_t index, bool isPointer = false);
+  mlir::Value emitFConst(double val);
+  mlir::Value emitArg(int64_t index, bool isPointer = false,
+                      bool isFloat = false);
   mlir::Value emitProgramId(int64_t axis);
   mlir::Value emitThreadId(int64_t axis);
 
   mlir::Value emitAdd(mlir::Value lhs, mlir::Value rhs);
   mlir::Value emitSub(mlir::Value lhs, mlir::Value rhs);
   mlir::Value emitMul(mlir::Value lhs, mlir::Value rhs);
+  mlir::Value emitDiv(mlir::Value lhs, mlir::Value rhs);
   mlir::Value emitCmpLt(mlir::Value lhs, mlir::Value rhs);
 
-  mlir::Value emitLoad(mlir::Value addr, mlir::Value mask = {});
+  mlir::Value emitLoad(mlir::Value addr, mlir::Value mask = {},
+                       bool isFloat = false);
   void emitStore(mlir::Value addr, mlir::Value val, mlir::Value mask = {});
 
   void emitBranchZero(mlir::Value cond, int64_t skip);

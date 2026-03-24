@@ -4,6 +4,7 @@
 #include "tiny-ton/IR/ElementType.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -92,6 +93,7 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
 
   ctx->getOrLoadDialect<mlir::gpu::GPUDialect>();
   ctx->getOrLoadDialect<mlir::arith::ArithDialect>();
+  ctx->getOrLoadDialect<mlir::math::MathDialect>();
   ctx->getOrLoadDialect<mlir::LLVM::LLVMDialect>();
   ctx->getOrLoadDialect<mlir::cf::ControlFlowDialect>();
 
@@ -261,6 +263,45 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
         auto ext = builder.create<mlir::arith::ExtUIOp>(loc, i32Ty, cmp);
         valueMap.map(cmpOp.getResult(), ext);
       }
+
+    } else if (auto expOp = llvm::dyn_cast<tinyton::ExpOp>(op)) {
+      auto operand = valueMap.lookup(expOp.getOperand());
+      auto res = builder.create<mlir::math::ExpOp>(loc, operand);
+      valueMap.map(expOp.getResult(), res);
+
+    } else if (auto logOp = llvm::dyn_cast<tinyton::LogOp>(op)) {
+      auto operand = valueMap.lookup(logOp.getOperand());
+      auto res = builder.create<mlir::math::LogOp>(loc, operand);
+      valueMap.map(logOp.getResult(), res);
+
+    } else if (auto sqrtOp = llvm::dyn_cast<tinyton::SqrtOp>(op)) {
+      auto operand = valueMap.lookup(sqrtOp.getOperand());
+      auto res = builder.create<mlir::math::SqrtOp>(loc, operand);
+      valueMap.map(sqrtOp.getResult(), res);
+
+    } else if (auto rsqrtOp = llvm::dyn_cast<tinyton::RsqrtOp>(op)) {
+      auto operand = valueMap.lookup(rsqrtOp.getOperand());
+      auto res = builder.create<mlir::math::RsqrtOp>(loc, operand);
+      valueMap.map(rsqrtOp.getResult(), res);
+
+    } else if (auto absOp = llvm::dyn_cast<tinyton::AbsOp>(op)) {
+      auto operand = valueMap.lookup(absOp.getOperand());
+      mlir::Value res;
+      if (isFloatType(operand.getType()))
+        res = builder.create<mlir::math::AbsFOp>(loc, operand);
+      else
+        res = builder.create<mlir::math::AbsIOp>(loc, operand);
+      valueMap.map(absOp.getResult(), res);
+
+    } else if (auto maxOp = llvm::dyn_cast<tinyton::MaxOp>(op)) {
+      auto lhs = valueMap.lookup(maxOp.getLhs());
+      auto rhs = valueMap.lookup(maxOp.getRhs());
+      mlir::Value res;
+      if (isFloatType(lhs.getType()))
+        res = builder.create<mlir::arith::MaxNumFOp>(loc, lhs, rhs);
+      else
+        res = builder.create<mlir::arith::MaxSIOp>(loc, lhs, rhs);
+      valueMap.map(maxOp.getResult(), res);
 
     } else if (auto loadOp = llvm::dyn_cast<tinyton::LoadOp>(op)) {
       auto addr = valueMap.lookup(loadOp.getAddr());

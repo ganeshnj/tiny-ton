@@ -126,6 +126,43 @@ mlir::Value IRBuilder::emitCmpLt(mlir::Value lhs, mlir::Value rhs) {
       .getResult();
 }
 
+mlir::Value IRBuilder::emitExp(mlir::Value operand) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto ty = operand.getType();
+  return impl_->builder->create<tinyton::ExpOp>(loc, ty, operand).getResult();
+}
+
+mlir::Value IRBuilder::emitLog(mlir::Value operand) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto ty = operand.getType();
+  return impl_->builder->create<tinyton::LogOp>(loc, ty, operand).getResult();
+}
+
+mlir::Value IRBuilder::emitSqrt(mlir::Value operand) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto ty = operand.getType();
+  return impl_->builder->create<tinyton::SqrtOp>(loc, ty, operand).getResult();
+}
+
+mlir::Value IRBuilder::emitRsqrt(mlir::Value operand) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto ty = operand.getType();
+  return impl_->builder->create<tinyton::RsqrtOp>(loc, ty, operand)
+      .getResult();
+}
+
+mlir::Value IRBuilder::emitAbs(mlir::Value operand) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto ty = operand.getType();
+  return impl_->builder->create<tinyton::AbsOp>(loc, ty, operand).getResult();
+}
+
+mlir::Value IRBuilder::emitMax(mlir::Value lhs, mlir::Value rhs) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto ty = lhs.getType();
+  return impl_->builder->create<tinyton::MaxOp>(loc, ty, lhs, rhs).getResult();
+}
+
 mlir::Value IRBuilder::emitLoad(mlir::Value addr, mlir::Value mask,
                                 ElementType elemType) {
   auto loc = mlir::UnknownLoc::get(&impl_->context);

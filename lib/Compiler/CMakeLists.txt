@@ -14,6 +14,7 @@ target_link_libraries(TinyTonCompiler
   MLIRGPUDialect
   MLIRGPUToNVVMTransforms
   MLIRArithToLLVM
+  MLIRMathToLLVM
   MLIRReconcileUnrealizedCasts
   MLIRNVVMDialect
   MLIRBuiltinToLLVMIRTranslation

@@ -47,6 +47,56 @@ def TinyTon_DivOp : TinyTon_Op<"div",
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
 }
 
+// --- Math intrinsics -------------------------------------------------------
+
+def TinyTon_ExpOp : TinyTon_Op<"exp",
+    [Pure, AllTypesMatch<["operand", "result"]>]> {
+  let summary = "Exponential (float).";
+  let arguments = (ins TinyTon_ScalarType:$operand);
+  let results = (outs TinyTon_ScalarType:$result);
+  let assemblyFormat = "$operand attr-dict `:` type($result)";
+}
+
+def TinyTon_LogOp : TinyTon_Op<"log",
+    [Pure, AllTypesMatch<["operand", "result"]>]> {
+  let summary = "Natural logarithm (float).";
+  let arguments = (ins TinyTon_ScalarType:$operand);
+  let results = (outs TinyTon_ScalarType:$result);
+  let assemblyFormat = "$operand attr-dict `:` type($result)";
+}
+
+def TinyTon_SqrtOp : TinyTon_Op<"sqrt",
+    [Pure, AllTypesMatch<["operand", "result"]>]> {
+  let summary = "Square root (float).";
+  let arguments = (ins TinyTon_ScalarType:$operand);
+  let results = (outs TinyTon_ScalarType:$result);
+  let assemblyFormat = "$operand attr-dict `:` type($result)";
+}
+
+def TinyTon_RsqrtOp : TinyTon_Op<"rsqrt",
+    [Pure, AllTypesMatch<["operand", "result"]>]> {
+  let summary = "Reciprocal square root (float).";
+  let arguments = (ins TinyTon_ScalarType:$operand);
+  let results = (outs TinyTon_ScalarType:$result);
+  let assemblyFormat = "$operand attr-dict `:` type($result)";
+}
+
+def TinyTon_AbsOp : TinyTon_Op<"abs",
+    [Pure, AllTypesMatch<["operand", "result"]>]> {
+  let summary = "Absolute value (integer or float).";
+  let arguments = (ins TinyTon_ScalarType:$operand);
+  let results = (outs TinyTon_ScalarType:$result);
+  let assemblyFormat = "$operand attr-dict `:` type($result)";
+}
+
+def TinyTon_MaxOp : TinyTon_Op<"max",
+    [Pure, Commutative, AllTypesMatch<["lhs", "rhs", "result"]>]> {
+  let summary = "Maximum (integer or float).";
+  let arguments = (ins TinyTon_ScalarType:$lhs, TinyTon_ScalarType:$rhs);
+  let results = (outs TinyTon_ScalarType:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
+}
+
 // --- Comparison ------------------------------------------------------------
 
 def TinyTon_CmpLtOp : TinyTon_Op<"cmp_lt",

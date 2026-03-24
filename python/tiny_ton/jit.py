@@ -11,7 +11,8 @@ from typing import Any, Optional
 import numpy as np
 
 
-_BUILTINS = {"program_id", "arange", "load", "store"}
+_BUILTINS = {"program_id", "arange", "load", "store",
+             "exp", "log", "sqrt", "rsqrt", "abs", "max"}
 
 # Module aliases that should be treated as the tiny_ton namespace.
 _MODULE_ALIASES = {"tt", "tiny_ton"}
@@ -139,6 +140,21 @@ class KernelVisitor(ast.NodeVisitor):
             mask = self._get_kwarg(node, "mask")
             self.builder.emit_store(addr, val, mask=mask)
             return None
+
+        if builtin == "exp":
+            return self.builder.emit_exp(self._eval(node.args[0]))
+        if builtin == "log":
+            return self.builder.emit_log(self._eval(node.args[0]))
+        if builtin == "sqrt":
+            return self.builder.emit_sqrt(self._eval(node.args[0]))
+        if builtin == "rsqrt":
+            return self.builder.emit_rsqrt(self._eval(node.args[0]))
+        if builtin == "abs":
+            return self.builder.emit_abs(self._eval(node.args[0]))
+        if builtin == "max":
+            a = self._eval(node.args[0])
+            b = self._eval(node.args[1])
+            return self.builder.emit_max(a, b)
 
         raise NotImplementedError(f"unsupported builtin: {builtin}")
 

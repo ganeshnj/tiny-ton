@@ -33,6 +33,13 @@ public:
   mlir::Value emitDiv(mlir::Value lhs, mlir::Value rhs);
   mlir::Value emitCmpLt(mlir::Value lhs, mlir::Value rhs);
 
+  mlir::Value emitExp(mlir::Value operand);
+  mlir::Value emitLog(mlir::Value operand);
+  mlir::Value emitSqrt(mlir::Value operand);
+  mlir::Value emitRsqrt(mlir::Value operand);
+  mlir::Value emitAbs(mlir::Value operand);
+  mlir::Value emitMax(mlir::Value lhs, mlir::Value rhs);
+
   mlir::Value emitLoad(mlir::Value addr, mlir::Value mask = {},
                        ElementType elemType = ElementType::I32);
   void emitStore(mlir::Value addr, mlir::Value val, mlir::Value mask = {});

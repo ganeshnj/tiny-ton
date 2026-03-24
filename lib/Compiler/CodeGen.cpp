@@ -267,6 +267,88 @@ std::vector<Instruction> emit(mlir::ModuleOp module,
         instructions.push_back({enc, asm_str});
       }
 
+    // --- Math intrinsics ---
+
+    } else if (auto expOp = llvm::dyn_cast<tinyton::ExpOp>(&op)) {
+      uint8_t rd = getReg(expOp.getResult());
+      uint8_t rs = getReg(expOp.getOperand());
+      uint8_t typeFlag = isF16Result(expOp.getResult()) ? 1 : 0;
+      uint16_t enc = encodeRI(0xE, rd, 0x09 << 4 | typeFlag);
+      uint16_t operands = (rs << 4);
+      std::string pfx = typeFlag ? "H" : "F";
+      instructions.push_back(
+          {enc, llvm::formatv("{0}EXP R{1}, R{2}", pfx, (int)rd, (int)rs)});
+      instructions.push_back(
+          {operands, llvm::formatv("  .operands R{0}", (int)rs)});
+
+    } else if (auto logOp = llvm::dyn_cast<tinyton::LogOp>(&op)) {
+      uint8_t rd = getReg(logOp.getResult());
+      uint8_t rs = getReg(logOp.getOperand());
+      uint8_t typeFlag = isF16Result(logOp.getResult()) ? 1 : 0;
+      uint16_t enc = encodeRI(0xE, rd, 0x0A << 4 | typeFlag);
+      uint16_t operands = (rs << 4);
+      std::string pfx = typeFlag ? "H" : "F";
+      instructions.push_back(
+          {enc, llvm::formatv("{0}LOG R{1}, R{2}", pfx, (int)rd, (int)rs)});
+      instructions.push_back(
+          {operands, llvm::formatv("  .operands R{0}", (int)rs)});
+
+    } else if (auto sqrtOp = llvm::dyn_cast<tinyton::SqrtOp>(&op)) {
+      uint8_t rd = getReg(sqrtOp.getResult());
+      uint8_t rs = getReg(sqrtOp.getOperand());
+      uint8_t typeFlag = isF16Result(sqrtOp.getResult()) ? 1 : 0;
+      uint16_t enc = encodeRI(0xE, rd, 0x0B << 4 | typeFlag);
+      uint16_t operands = (rs << 4);
+      std::string pfx = typeFlag ? "H" : "F";
+      instructions.push_back(
+          {enc, llvm::formatv("{0}SQRT R{1}, R{2}", pfx, (int)rd, (int)rs)});
+      instructions.push_back(
+          {operands, llvm::formatv("  .operands R{0}", (int)rs)});
+
+    } else if (auto rsqrtOp = llvm::dyn_cast<tinyton::RsqrtOp>(&op)) {
+      uint8_t rd = getReg(rsqrtOp.getResult());
+      uint8_t rs = getReg(rsqrtOp.getOperand());
+      uint8_t typeFlag = isF16Result(rsqrtOp.getResult()) ? 1 : 0;
+      uint16_t enc = encodeRI(0xE, rd, 0x0C << 4 | typeFlag);
+      uint16_t operands = (rs << 4);
+      std::string pfx = typeFlag ? "H" : "F";
+      instructions.push_back(
+          {enc,
+           llvm::formatv("{0}RSQRT R{1}, R{2}", pfx, (int)rd, (int)rs)});
+      instructions.push_back(
+          {operands, llvm::formatv("  .operands R{0}", (int)rs)});
+
+    } else if (auto absOp = llvm::dyn_cast<tinyton::AbsOp>(&op)) {
+      uint8_t rd = getReg(absOp.getResult());
+      uint8_t rs = getReg(absOp.getOperand());
+      uint8_t typeFlag = isF16Result(absOp.getResult())    ? 1
+                         : isFloatResult(absOp.getResult()) ? 0
+                                                            : 2;
+      uint16_t enc = encodeRI(0xE, rd, 0x0D << 4 | typeFlag);
+      uint16_t operands = (rs << 4);
+      std::string pfx = typeFlag == 1 ? "H" : typeFlag == 0 ? "F" : "";
+      instructions.push_back(
+          {enc, llvm::formatv("{0}ABS R{1}, R{2}", pfx, (int)rd, (int)rs)});
+      instructions.push_back(
+          {operands, llvm::formatv("  .operands R{0}", (int)rs)});
+
+    } else if (auto maxOp = llvm::dyn_cast<tinyton::MaxOp>(&op)) {
+      uint8_t rd = getReg(maxOp.getResult());
+      uint8_t rs = getReg(maxOp.getLhs());
+      uint8_t rt = getReg(maxOp.getRhs());
+      uint8_t typeFlag = isF16Result(maxOp.getResult())    ? 1
+                         : isFloatResult(maxOp.getResult()) ? 0
+                                                            : 2;
+      uint16_t enc = encodeRI(0xE, rd, 0x0E << 4 | typeFlag);
+      uint16_t operands = (rs << 4) | rt;
+      std::string pfx = typeFlag == 1 ? "H" : typeFlag == 0 ? "F" : "";
+      instructions.push_back(
+          {enc, llvm::formatv("{0}MAX R{1}, R{2}, R{3}", pfx, (int)rd,
+                              (int)rs, (int)rt)});
+      instructions.push_back(
+          {operands,
+           llvm::formatv("  .operands R{0}, R{1}", (int)rs, (int)rt)});
+
     // --- Memory ---
 
     } else if (auto loadOp = llvm::dyn_cast<tinyton::LoadOp>(&op)) {

@@ -1,7 +1,9 @@
 #include "tiny-ton/Runtime/Simulator.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 namespace tinyton {
@@ -316,6 +318,101 @@ void SimulatedGPU::run(int numBlocks, int threadsPerBlock) {
             float a = regToHalf(regs[hrs]);
             float b = regToHalf(regs[hrt]);
             regs[rd] = (a < b) ? 1 : 0;
+            pc += 1;
+            break;
+          }
+          case 0x09: {
+            // EXP: next word has rs in upper nibble; typeFlag in imm low nibble
+            assert(pc + 1 < (int)prog.size() && "EXP: missing operand word");
+            uint16_t operands = prog[pc + 1];
+            uint8_t frs = (operands >> 4) & 0xF;
+            uint8_t typeFlag = imm & 0xF;
+            if (typeFlag == 1) {
+              regs[rd] = halfToReg(std::exp(regToHalf(regs[frs])));
+            } else {
+              regs[rd] = floatToReg(std::exp(regToFloat(regs[frs])));
+            }
+            pc += 1;
+            break;
+          }
+          case 0x0A: {
+            // LOG
+            assert(pc + 1 < (int)prog.size() && "LOG: missing operand word");
+            uint16_t operands = prog[pc + 1];
+            uint8_t frs = (operands >> 4) & 0xF;
+            uint8_t typeFlag = imm & 0xF;
+            if (typeFlag == 1) {
+              regs[rd] = halfToReg(std::log(regToHalf(regs[frs])));
+            } else {
+              regs[rd] = floatToReg(std::log(regToFloat(regs[frs])));
+            }
+            pc += 1;
+            break;
+          }
+          case 0x0B: {
+            // SQRT
+            assert(pc + 1 < (int)prog.size() && "SQRT: missing operand word");
+            uint16_t operands = prog[pc + 1];
+            uint8_t frs = (operands >> 4) & 0xF;
+            uint8_t typeFlag = imm & 0xF;
+            if (typeFlag == 1) {
+              regs[rd] = halfToReg(std::sqrt(regToHalf(regs[frs])));
+            } else {
+              regs[rd] = floatToReg(std::sqrt(regToFloat(regs[frs])));
+            }
+            pc += 1;
+            break;
+          }
+          case 0x0C: {
+            // RSQRT
+            assert(pc + 1 < (int)prog.size() && "RSQRT: missing operand word");
+            uint16_t operands = prog[pc + 1];
+            uint8_t frs = (operands >> 4) & 0xF;
+            uint8_t typeFlag = imm & 0xF;
+            if (typeFlag == 1) {
+              float val = regToHalf(regs[frs]);
+              regs[rd] = halfToReg(1.0f / std::sqrt(val));
+            } else {
+              float val = regToFloat(regs[frs]);
+              regs[rd] = floatToReg(1.0f / std::sqrt(val));
+            }
+            pc += 1;
+            break;
+          }
+          case 0x0D: {
+            // ABS: typeFlag 0=f32, 1=f16, 2=i32
+            assert(pc + 1 < (int)prog.size() && "ABS: missing operand word");
+            uint16_t operands = prog[pc + 1];
+            uint8_t frs = (operands >> 4) & 0xF;
+            uint8_t typeFlag = imm & 0xF;
+            if (typeFlag == 1) {
+              regs[rd] = halfToReg(std::fabs(regToHalf(regs[frs])));
+            } else if (typeFlag == 2) {
+              regs[rd] = std::abs(regs[frs]);
+            } else {
+              regs[rd] = floatToReg(std::fabs(regToFloat(regs[frs])));
+            }
+            pc += 1;
+            break;
+          }
+          case 0x0E: {
+            // MAX: binary; typeFlag 0=f32, 1=f16, 2=i32
+            assert(pc + 1 < (int)prog.size() && "MAX: missing operand word");
+            uint16_t operands = prog[pc + 1];
+            uint8_t frs = (operands >> 4) & 0xF;
+            uint8_t frt = operands & 0xF;
+            uint8_t typeFlag = imm & 0xF;
+            if (typeFlag == 1) {
+              float a = regToHalf(regs[frs]);
+              float b = regToHalf(regs[frt]);
+              regs[rd] = halfToReg(std::fmax(a, b));
+            } else if (typeFlag == 2) {
+              regs[rd] = std::max(regs[frs], regs[frt]);
+            } else {
+              float a = regToFloat(regs[frs]);
+              float b = regToFloat(regs[frt]);
+              regs[rd] = floatToReg(std::fmax(a, b));
+            }
             pc += 1;
             break;
           }

@@ -81,6 +81,30 @@ PYBIND11_MODULE(_tiny_ton_core, m) {
            [](tinyton::IRBuilder &self, PyValue lhs, PyValue rhs) {
              return PyValue{self.emitCmpLt(lhs.val, rhs.val)};
            })
+      .def("emit_exp",
+           [](tinyton::IRBuilder &self, PyValue v) {
+             return PyValue{self.emitExp(v.val)};
+           })
+      .def("emit_log",
+           [](tinyton::IRBuilder &self, PyValue v) {
+             return PyValue{self.emitLog(v.val)};
+           })
+      .def("emit_sqrt",
+           [](tinyton::IRBuilder &self, PyValue v) {
+             return PyValue{self.emitSqrt(v.val)};
+           })
+      .def("emit_rsqrt",
+           [](tinyton::IRBuilder &self, PyValue v) {
+             return PyValue{self.emitRsqrt(v.val)};
+           })
+      .def("emit_abs",
+           [](tinyton::IRBuilder &self, PyValue v) {
+             return PyValue{self.emitAbs(v.val)};
+           })
+      .def("emit_max",
+           [](tinyton::IRBuilder &self, PyValue lhs, PyValue rhs) {
+             return PyValue{self.emitMax(lhs.val, rhs.val)};
+           })
       .def("emit_load",
            [](tinyton::IRBuilder &self, PyValue addr, py::object mask,
               const std::string &dtype) {

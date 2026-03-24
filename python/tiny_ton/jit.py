@@ -238,6 +238,21 @@ class JITFunction:
         if use_cuda:
             sm = os.environ.get("TTN_SM_VERSION", "sm_87")
             nvptx_result = builder.compile_to_nvptx(sm_version=sm)
+            # #region agent log
+            import sys as _sys
+            _ptx_head = nvptx_result.ptx[:600] if nvptx_result.success else ""
+            _has_extern = "__nv_" in _ptx_head if _ptx_head else False
+            _dbg_log = f"[ttn-debug-6471c7] compile_to_nvptx: success={nvptx_result.success}, sm={sm}, has_extern_nv={_has_extern}, error={nvptx_result.error!r}"
+            print(_dbg_log, file=_sys.stderr, flush=True)
+            if nvptx_result.success:
+                print(f"[ttn-debug-6471c7] PTX head:\n{_ptx_head}", file=_sys.stderr, flush=True)
+            try:
+                import json as _j, time as _t
+                with open("/Users/ganesh.jangir/Developer/tiny-gpu-compiler/.cursor/debug-6471c7.log", "a") as _f:
+                    _f.write(_j.dumps({"sessionId":"6471c7","location":"jit.py:compile","message":"compile_to_nvptx result","data":{"success":nvptx_result.success,"error":str(nvptx_result.error),"sm":sm,"ptx_head":_ptx_head,"has_extern_nv":_has_extern},"timestamp":int(_t.time()*1000),"hypothesisId":"H5,H6,H7"})+"\n")
+            except Exception:
+                pass
+            # #endregion
             assert nvptx_result.success, \
                 f"NVPTX compilation failed: {nvptx_result.error}"
             return {
@@ -287,6 +302,17 @@ class JITFunction:
                 kernel_args.append(int(a))
 
         try:
+            # #region agent log
+            _ptx = compiled["ptx"]
+            print(f"[ttn-debug-6471c7] PTX first 800 chars:\n{_ptx[:800]}", flush=True)
+            print(f"[ttn-debug-6471c7] has_extern_nv={'__nv_' in _ptx}, ptx_len={len(_ptx)}", flush=True)
+            try:
+                import json as _j, time as _t
+                with open("/Users/ganesh.jangir/Developer/tiny-gpu-compiler/.cursor/debug-6471c7.log", "a") as _f:
+                    _f.write(_j.dumps({"sessionId":"6471c7","location":"jit.py:_launch_cuda","message":"PTX before launch","data":{"has_extern_nv":"__nv_" in _ptx,"ptx_head":_ptx[:800],"ptx_len":len(_ptx)},"timestamp":int(_t.time()*1000),"hypothesisId":"H5"})+"\n")
+            except Exception:
+                pass
+            # #endregion
             rt.launch(compiled["ptx"], compiled["kernel_name"],
                       num_blocks, block_size, kernel_args)
 

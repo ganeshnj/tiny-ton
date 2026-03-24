@@ -179,7 +179,7 @@ NVPTXCompileResult compileToNVPTX(mlir::ModuleOp srcModule,
       });
 
   if (mlir::failed(pm.run(clonedModule))) {
-    result.error = "MLIR pass pipeline failed";
+    result.error = "[combined-pass-v2] MLIR pass pipeline failed";
     if (!diagMsg.empty())
       result.error += ": " + diagMsg;
     clonedModule.erase();

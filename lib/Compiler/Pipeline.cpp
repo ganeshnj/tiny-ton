@@ -25,11 +25,15 @@
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Transforms/DialectConversion.h"
 
+#include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Linker/Linker.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
@@ -130,6 +134,45 @@ CompileResult compileModule(mlir::ModuleOp module, const CompileOptions &opts) {
   return result;
 }
 
+static std::string findLibdevice() {
+  const char *paths[] = {
+      "/usr/local/cuda/nvvm/libdevice/libdevice.10.bc",
+      "/usr/lib/nvidia-cuda-toolkit/libdevice/libdevice.10.bc",
+  };
+  if (auto *cudaHome = getenv("CUDA_HOME")) {
+    std::string p = std::string(cudaHome) + "/nvvm/libdevice/libdevice.10.bc";
+    if (llvm::sys::fs::exists(p))
+      return p;
+  }
+  if (auto *cudaPath = getenv("CUDA_PATH")) {
+    std::string p = std::string(cudaPath) + "/nvvm/libdevice/libdevice.10.bc";
+    if (llvm::sys::fs::exists(p))
+      return p;
+  }
+  for (auto *p : paths) {
+    if (llvm::sys::fs::exists(p))
+      return p;
+  }
+  return {};
+}
+
+static bool linkLibdevice(llvm::Module &module, llvm::LLVMContext &ctx) {
+  auto path = findLibdevice();
+  if (path.empty())
+    return false;
+  auto bufOrErr = llvm::MemoryBuffer::getFile(path);
+  if (!bufOrErr)
+    return false;
+  auto libdeviceOrErr =
+      llvm::parseBitcodeFile(bufOrErr.get()->getMemBufferRef(), ctx);
+  if (!libdeviceOrErr)
+    return false;
+  (*libdeviceOrErr)->setTargetTriple(module.getTargetTriple());
+  (*libdeviceOrErr)->setDataLayout(module.getDataLayout());
+  return !llvm::Linker::linkModules(module, std::move(*libdeviceOrErr),
+                                    llvm::Linker::LinkOnlyNeeded);
+}
+
 static void initNVPTXOnce() {
   static std::once_flag flag;
   std::call_once(flag, [] {
@@ -226,6 +269,13 @@ NVPTXCompileResult compileToNVPTX(mlir::ModuleOp srcModule,
   }
 
   llvmModule->setTargetTriple("nvptx64-nvidia-cuda");
+
+  // #region agent log
+  bool libdeviceLinked = linkLibdevice(*llvmModule, llvmCtx);
+  llvm::errs() << "[ttn-debug-6471c7] libdevice linked: "
+               << (libdeviceLinked ? "yes" : "no")
+               << ", path: " << findLibdevice() << "\n";
+  // #endregion
 
   std::string targetError;
   auto *target =

@@ -30,4 +30,6 @@ target_link_libraries(TinyTonCompiler
   MLIRTargetLLVMIRExport
   MLIRLLVMDialect
   MLIRSCFDialect
+  LLVMLinker
+  LLVMBitReader
 )

@@ -4,7 +4,6 @@
 #include "tiny-ton/IR/ElementType.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -93,7 +92,6 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
 
   ctx->getOrLoadDialect<mlir::gpu::GPUDialect>();
   ctx->getOrLoadDialect<mlir::arith::ArithDialect>();
-  ctx->getOrLoadDialect<mlir::math::MathDialect>();
   ctx->getOrLoadDialect<mlir::LLVM::LLVMDialect>();
   ctx->getOrLoadDialect<mlir::cf::ControlFlowDialect>();
 
@@ -266,31 +264,86 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
 
     } else if (auto expOp = llvm::dyn_cast<tinyton::ExpOp>(op)) {
       auto operand = valueMap.lookup(expOp.getOperand());
-      auto res = builder.create<mlir::math::ExpOp>(loc, operand);
+      auto ty = operand.getType();
+      mlir::Value res;
+      if (ty.isF16()) {
+        auto f32Ty = mlir::Float32Type::get(ctx);
+        auto ext = builder.create<mlir::arith::ExtFOp>(loc, f32Ty, operand);
+        auto computed = builder.create<mlir::LLVM::ExpOp>(loc, f32Ty, ext);
+        res = builder.create<mlir::arith::TruncFOp>(loc, ty, computed);
+      } else {
+        res = builder.create<mlir::LLVM::ExpOp>(loc, ty, operand);
+      }
       valueMap.map(expOp.getResult(), res);
 
     } else if (auto logOp = llvm::dyn_cast<tinyton::LogOp>(op)) {
       auto operand = valueMap.lookup(logOp.getOperand());
-      auto res = builder.create<mlir::math::LogOp>(loc, operand);
+      auto ty = operand.getType();
+      mlir::Value res;
+      if (ty.isF16()) {
+        auto f32Ty = mlir::Float32Type::get(ctx);
+        auto ext = builder.create<mlir::arith::ExtFOp>(loc, f32Ty, operand);
+        auto computed = builder.create<mlir::LLVM::LogOp>(loc, f32Ty, ext);
+        res = builder.create<mlir::arith::TruncFOp>(loc, ty, computed);
+      } else {
+        res = builder.create<mlir::LLVM::LogOp>(loc, ty, operand);
+      }
       valueMap.map(logOp.getResult(), res);
 
     } else if (auto sqrtOp = llvm::dyn_cast<tinyton::SqrtOp>(op)) {
       auto operand = valueMap.lookup(sqrtOp.getOperand());
-      auto res = builder.create<mlir::math::SqrtOp>(loc, operand);
+      auto ty = operand.getType();
+      mlir::Value res;
+      if (ty.isF16()) {
+        auto f32Ty = mlir::Float32Type::get(ctx);
+        auto ext = builder.create<mlir::arith::ExtFOp>(loc, f32Ty, operand);
+        auto computed = builder.create<mlir::LLVM::SqrtOp>(loc, f32Ty, ext);
+        res = builder.create<mlir::arith::TruncFOp>(loc, ty, computed);
+      } else {
+        res = builder.create<mlir::LLVM::SqrtOp>(loc, ty, operand);
+      }
       valueMap.map(sqrtOp.getResult(), res);
 
     } else if (auto rsqrtOp = llvm::dyn_cast<tinyton::RsqrtOp>(op)) {
       auto operand = valueMap.lookup(rsqrtOp.getOperand());
-      auto res = builder.create<mlir::math::RsqrtOp>(loc, operand);
+      auto ty = operand.getType();
+      auto f32Ty = mlir::Float32Type::get(ctx);
+      mlir::Value src = operand;
+      if (ty.isF16())
+        src = builder.create<mlir::arith::ExtFOp>(loc, f32Ty, operand);
+      auto sqrtVal =
+          builder.create<mlir::LLVM::SqrtOp>(loc, src.getType(), src);
+      auto one = builder.create<mlir::arith::ConstantFloatOp>(
+          loc, llvm::APFloat(1.0f), f32Ty);
+      auto divVal =
+          builder.create<mlir::arith::DivFOp>(loc, one, sqrtVal);
+      mlir::Value res = divVal;
+      if (ty.isF16())
+        res = builder.create<mlir::arith::TruncFOp>(loc, ty, divVal);
       valueMap.map(rsqrtOp.getResult(), res);
 
     } else if (auto absOp = llvm::dyn_cast<tinyton::AbsOp>(op)) {
       auto operand = valueMap.lookup(absOp.getOperand());
       mlir::Value res;
-      if (isFloatType(operand.getType()))
-        res = builder.create<mlir::math::AbsFOp>(loc, operand);
-      else
-        res = builder.create<mlir::math::AbsIOp>(loc, operand);
+      if (isFloatType(operand.getType())) {
+        auto ty = operand.getType();
+        if (ty.isF16()) {
+          auto f32Ty = mlir::Float32Type::get(ctx);
+          auto ext = builder.create<mlir::arith::ExtFOp>(loc, f32Ty, operand);
+          auto computed =
+              builder.create<mlir::LLVM::FAbsOp>(loc, f32Ty, ext);
+          res = builder.create<mlir::arith::TruncFOp>(loc, ty, computed);
+        } else {
+          res = builder.create<mlir::LLVM::FAbsOp>(loc, ty, operand);
+        }
+      } else {
+        auto zero =
+            builder.create<mlir::arith::ConstantIntOp>(loc, 0, i32Ty);
+        auto neg = builder.create<mlir::arith::SubIOp>(loc, zero, operand);
+        auto cmp = builder.create<mlir::arith::CmpIOp>(
+            loc, mlir::arith::CmpIPredicate::slt, operand, zero);
+        res = builder.create<mlir::arith::SelectOp>(loc, cmp, neg, operand);
+      }
       valueMap.map(absOp.getResult(), res);
 
     } else if (auto maxOp = llvm::dyn_cast<tinyton::MaxOp>(op)) {

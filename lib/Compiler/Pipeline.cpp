@@ -4,7 +4,6 @@
 #include "tiny-ton/Conversion/TinyTonToGPU.h"
 
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
-#include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -107,7 +106,6 @@ NVPTXCompileResult compileToNVPTX(mlir::ModuleOp srcModule,
 
   auto &gpuPM = pm.nest<mlir::gpu::GPUModuleOp>();
   gpuPM.addPass(mlir::createArithToLLVMConversionPass());
-  gpuPM.addPass(mlir::createConvertMathToLLVMPass());
   gpuPM.addPass(mlir::createConvertGpuOpsToNVVMOps());
   gpuPM.addPass(mlir::createReconcileUnrealizedCastsPass());
 

@@ -4,11 +4,18 @@
 #include "tiny-ton/Conversion/TinyTonToGPU.h"
 
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
+#include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
+#include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
@@ -16,6 +23,7 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
+#include "mlir/Transforms/DialectConversion.h"
 
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -27,6 +35,54 @@
 #include "llvm/Target/TargetMachine.h"
 
 #include <mutex>
+
+namespace {
+
+struct CombinedGPULoweringPass
+    : public mlir::OperationPass<mlir::gpu::GPUModuleOp> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CombinedGPULoweringPass)
+
+  CombinedGPULoweringPass()
+      : mlir::OperationPass<mlir::gpu::GPUModuleOp>(
+            mlir::TypeID::get<CombinedGPULoweringPass>()) {}
+
+  llvm::StringRef getName() const override { return "CombinedGPULoweringPass"; }
+  std::unique_ptr<mlir::Pass> clonePass() const override {
+    return std::make_unique<CombinedGPULoweringPass>();
+  }
+
+  void getDependentDialects(mlir::DialectRegistry &registry) const override {
+    registry.insert<mlir::LLVM::LLVMDialect>();
+    registry.insert<mlir::NVVM::NVVMDialect>();
+  }
+
+  void runOnOperation() override {
+    auto gpuModule = getOperation();
+    auto *ctx = gpuModule.getContext();
+
+    mlir::LLVMTypeConverter converter(ctx);
+    mlir::ConversionTarget target(*ctx);
+    mlir::RewritePatternSet patterns(ctx);
+
+    mlir::arith::populateArithToLLVMConversionPatterns(converter, patterns);
+    mlir::populateMathToLLVMConversionPatterns(converter, patterns);
+    mlir::cf::populateControlFlowToLLVMConversionPatterns(converter, patterns);
+    mlir::populateFuncToLLVMFuncOpConversionPattern(converter, patterns);
+    mlir::populateGpuToNVVMConversionPatterns(converter, patterns);
+
+    mlir::configureGpuToNVVMConversionLegality(target);
+    target.addIllegalDialect<mlir::arith::ArithDialect>();
+    target.addIllegalDialect<mlir::math::MathDialect>();
+    target.addIllegalDialect<mlir::cf::ControlFlowDialect>();
+    target.addLegalOp<mlir::UnrealizedConversionCastOp>();
+
+    if (mlir::failed(
+            mlir::applyPartialConversion(gpuModule, target, std::move(patterns))))
+      signalPassFailure();
+  }
+};
+
+} // namespace
 
 namespace tinyton {
 
@@ -105,12 +161,27 @@ NVPTXCompileResult compileToNVPTX(mlir::ModuleOp srcModule,
   pm.enableVerifier(true);
 
   auto &gpuPM = pm.nest<mlir::gpu::GPUModuleOp>();
-  gpuPM.addPass(mlir::createArithToLLVMConversionPass());
-  gpuPM.addPass(mlir::createConvertGpuOpsToNVVMOps());
+  gpuPM.addPass(std::make_unique<CombinedGPULoweringPass>());
   gpuPM.addPass(mlir::createReconcileUnrealizedCastsPass());
+
+  std::string diagMsg;
+  mlir::ScopedDiagnosticHandler diagHandler(
+      ctx, [&](mlir::Diagnostic &diag) -> mlir::LogicalResult {
+        llvm::raw_string_ostream os(diagMsg);
+        diag.print(os);
+        os << "\n";
+        for (auto &note : diag.getNotes()) {
+          os << "  note: ";
+          note.print(os);
+          os << "\n";
+        }
+        return mlir::success();
+      });
 
   if (mlir::failed(pm.run(clonedModule))) {
     result.error = "MLIR pass pipeline failed";
+    if (!diagMsg.empty())
+      result.error += ": " + diagMsg;
     clonedModule.erase();
     return result;
   }

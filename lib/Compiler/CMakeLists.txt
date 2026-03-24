@@ -14,7 +14,15 @@ target_link_libraries(TinyTonCompiler
   MLIRGPUDialect
   MLIRGPUToNVVMTransforms
   MLIRArithToLLVM
+  MLIRArithDialect
+  MLIRMathToLLVM
+  MLIRMathDialect
+  MLIRControlFlowToLLVM
+  MLIRControlFlowDialect
+  MLIRFuncToLLVM
+  MLIRLLVMCommonConversion
   MLIRReconcileUnrealizedCasts
+  MLIRTransformUtils
   MLIRNVVMDialect
   MLIRBuiltinToLLVMIRTranslation
   MLIRNVVMToLLVMIRTranslation

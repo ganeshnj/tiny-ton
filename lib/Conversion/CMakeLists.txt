@@ -13,6 +13,7 @@ target_link_libraries(TinyTonConversion PUBLIC
   MLIRArithDialect
   MLIRLLVMDialect
   MLIRControlFlowDialect
+  MLIRMathDialect
   MLIRIR
   MLIRSupport
 )

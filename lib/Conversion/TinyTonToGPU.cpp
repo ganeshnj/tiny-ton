@@ -7,6 +7,7 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
@@ -94,6 +95,7 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
   ctx->getOrLoadDialect<mlir::arith::ArithDialect>();
   ctx->getOrLoadDialect<mlir::LLVM::LLVMDialect>();
   ctx->getOrLoadDialect<mlir::cf::ControlFlowDialect>();
+  ctx->getOrLoadDialect<mlir::math::MathDialect>();
 
   auto i32Ty = mlir::IntegerType::get(ctx, 32);
   auto i1Ty = mlir::IntegerType::get(ctx, 1);
@@ -269,10 +271,10 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
       if (ty.isF16()) {
         auto f32Ty = mlir::Float32Type::get(ctx);
         auto ext = builder.create<mlir::arith::ExtFOp>(loc, f32Ty, operand);
-        auto computed = builder.create<mlir::LLVM::ExpOp>(loc, f32Ty, ext);
+        auto computed = builder.create<mlir::math::ExpOp>(loc, ext);
         res = builder.create<mlir::arith::TruncFOp>(loc, ty, computed);
       } else {
-        res = builder.create<mlir::LLVM::ExpOp>(loc, ty, operand);
+        res = builder.create<mlir::math::ExpOp>(loc, operand);
       }
       valueMap.map(expOp.getResult(), res);
 
@@ -283,10 +285,10 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
       if (ty.isF16()) {
         auto f32Ty = mlir::Float32Type::get(ctx);
         auto ext = builder.create<mlir::arith::ExtFOp>(loc, f32Ty, operand);
-        auto computed = builder.create<mlir::LLVM::LogOp>(loc, f32Ty, ext);
+        auto computed = builder.create<mlir::math::LogOp>(loc, ext);
         res = builder.create<mlir::arith::TruncFOp>(loc, ty, computed);
       } else {
-        res = builder.create<mlir::LLVM::LogOp>(loc, ty, operand);
+        res = builder.create<mlir::math::LogOp>(loc, operand);
       }
       valueMap.map(logOp.getResult(), res);
 
@@ -297,10 +299,10 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
       if (ty.isF16()) {
         auto f32Ty = mlir::Float32Type::get(ctx);
         auto ext = builder.create<mlir::arith::ExtFOp>(loc, f32Ty, operand);
-        auto computed = builder.create<mlir::LLVM::SqrtOp>(loc, f32Ty, ext);
+        auto computed = builder.create<mlir::math::SqrtOp>(loc, ext);
         res = builder.create<mlir::arith::TruncFOp>(loc, ty, computed);
       } else {
-        res = builder.create<mlir::LLVM::SqrtOp>(loc, ty, operand);
+        res = builder.create<mlir::math::SqrtOp>(loc, operand);
       }
       valueMap.map(sqrtOp.getResult(), res);
 
@@ -311,8 +313,7 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
       mlir::Value src = operand;
       if (ty.isF16())
         src = builder.create<mlir::arith::ExtFOp>(loc, f32Ty, operand);
-      auto sqrtVal =
-          builder.create<mlir::LLVM::SqrtOp>(loc, src.getType(), src);
+      auto sqrtVal = builder.create<mlir::math::SqrtOp>(loc, src);
       auto one = builder.create<mlir::arith::ConstantFloatOp>(
           loc, llvm::APFloat(1.0f), f32Ty);
       auto divVal =
@@ -330,11 +331,10 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
         if (ty.isF16()) {
           auto f32Ty = mlir::Float32Type::get(ctx);
           auto ext = builder.create<mlir::arith::ExtFOp>(loc, f32Ty, operand);
-          auto computed =
-              builder.create<mlir::LLVM::FAbsOp>(loc, f32Ty, ext);
+          auto computed = builder.create<mlir::math::AbsFOp>(loc, ext);
           res = builder.create<mlir::arith::TruncFOp>(loc, ty, computed);
         } else {
-          res = builder.create<mlir::LLVM::FAbsOp>(loc, ty, operand);
+          res = builder.create<mlir::math::AbsFOp>(loc, operand);
         }
       } else {
         auto zero =

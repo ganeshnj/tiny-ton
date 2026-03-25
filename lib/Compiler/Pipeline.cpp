@@ -222,7 +222,7 @@ NVPTXCompileResult compileToNVPTX(mlir::ModuleOp srcModule,
       });
 
   if (mlir::failed(pm.run(clonedModule))) {
-    result.error = "[combined-pass-v2] MLIR pass pipeline failed";
+    result.error = "MLIR pass pipeline failed";
     if (!diagMsg.empty())
       result.error += ": " + diagMsg;
     clonedModule.erase();
@@ -270,12 +270,7 @@ NVPTXCompileResult compileToNVPTX(mlir::ModuleOp srcModule,
 
   llvmModule->setTargetTriple("nvptx64-nvidia-cuda");
 
-  // #region agent log
-  bool libdeviceLinked = linkLibdevice(*llvmModule, llvmCtx);
-  llvm::errs() << "[ttn-debug-6471c7] libdevice linked: "
-               << (libdeviceLinked ? "yes" : "no")
-               << ", path: " << findLibdevice() << "\n";
-  // #endregion
+  linkLibdevice(*llvmModule, llvmCtx);
 
   std::string targetError;
   auto *target =

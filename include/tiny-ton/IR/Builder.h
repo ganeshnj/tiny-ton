@@ -40,6 +40,9 @@ public:
   mlir::Value emitAbs(mlir::Value operand);
   mlir::Value emitMax(mlir::Value lhs, mlir::Value rhs);
 
+  mlir::Value emitReduceSum(mlir::Value operand);
+  mlir::Value emitReduceMax(mlir::Value operand);
+
   mlir::Value emitLoad(mlir::Value addr, mlir::Value mask = {},
                        ElementType elemType = ElementType::I32);
   void emitStore(mlir::Value addr, mlir::Value val, mlir::Value mask = {});

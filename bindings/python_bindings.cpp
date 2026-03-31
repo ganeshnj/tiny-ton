@@ -105,6 +105,14 @@ PYBIND11_MODULE(_tiny_ton_core, m) {
            [](tinyton::IRBuilder &self, PyValue lhs, PyValue rhs) {
              return PyValue{self.emitMax(lhs.val, rhs.val)};
            })
+      .def("emit_reduce_sum",
+           [](tinyton::IRBuilder &self, PyValue v) {
+             return PyValue{self.emitReduceSum(v.val)};
+           })
+      .def("emit_reduce_max",
+           [](tinyton::IRBuilder &self, PyValue v) {
+             return PyValue{self.emitReduceMax(v.val)};
+           })
       .def("emit_load",
            [](tinyton::IRBuilder &self, PyValue addr, py::object mask,
               const std::string &dtype) {

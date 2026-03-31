@@ -1,0 +1,39 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM/MLIR 18
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-18 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-18.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            llvm-18-dev libmlir-18-dev mlir-18-tools \
+            cmake ninja-build
+
+      - name: Configure
+        run: |
+          cmake -G Ninja -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMLIR_DIR=/usr/lib/llvm-18/lib/cmake/mlir \
+            -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm \
+            -DTTN_ENABLE_PYTHON=OFF \
+            -DTTN_ENABLE_TESTS=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure

@@ -163,6 +163,20 @@ mlir::Value IRBuilder::emitMax(mlir::Value lhs, mlir::Value rhs) {
   return impl_->builder->create<tinyton::MaxOp>(loc, ty, lhs, rhs).getResult();
 }
 
+mlir::Value IRBuilder::emitReduceSum(mlir::Value operand) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto ty = operand.getType();
+  return impl_->builder->create<tinyton::ReduceSumOp>(loc, ty, operand)
+      .getResult();
+}
+
+mlir::Value IRBuilder::emitReduceMax(mlir::Value operand) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto ty = operand.getType();
+  return impl_->builder->create<tinyton::ReduceMaxOp>(loc, ty, operand)
+      .getResult();
+}
+
 mlir::Value IRBuilder::emitLoad(mlir::Value addr, mlir::Value mask,
                                 ElementType elemType) {
   auto loc = mlir::UnknownLoc::get(&impl_->context);

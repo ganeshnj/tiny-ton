@@ -97,6 +97,24 @@ def TinyTon_MaxOp : TinyTon_Op<"max",
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
 }
 
+// --- Reductions ------------------------------------------------------------
+
+def TinyTon_ReduceSumOp : TinyTon_Op<"reduce_sum",
+    [AllTypesMatch<["operand", "result"]>]> {
+  let summary = "Sum reduction across all threads in the block.";
+  let arguments = (ins TinyTon_ScalarType:$operand);
+  let results = (outs TinyTon_ScalarType:$result);
+  let assemblyFormat = "$operand attr-dict `:` type($result)";
+}
+
+def TinyTon_ReduceMaxOp : TinyTon_Op<"reduce_max",
+    [AllTypesMatch<["operand", "result"]>]> {
+  let summary = "Max reduction across all threads in the block.";
+  let arguments = (ins TinyTon_ScalarType:$operand);
+  let results = (outs TinyTon_ScalarType:$result);
+  let assemblyFormat = "$operand attr-dict `:` type($result)";
+}
+
 // --- Comparison ------------------------------------------------------------
 
 def TinyTon_CmpLtOp : TinyTon_Op<"cmp_lt",

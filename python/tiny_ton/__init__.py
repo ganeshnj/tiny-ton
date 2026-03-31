@@ -25,10 +25,22 @@ def store(ptr, val, mask=None):
     raise NotImplementedError("store is only valid inside a @tt.jit kernel")
 
 
+def reduce_sum(x):
+    """Sum reduction across all threads in the block."""
+    raise NotImplementedError("reduce_sum is only valid inside a @tt.jit kernel")
+
+
+def reduce_max(x):
+    """Max reduction across all threads in the block."""
+    raise NotImplementedError("reduce_max is only valid inside a @tt.jit kernel")
+
+
 __all__ = [
     "jit",
     "program_id",
     "arange",
     "load",
     "store",
+    "reduce_sum",
+    "reduce_max",
 ]

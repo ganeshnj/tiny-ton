@@ -356,6 +356,46 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
         res = builder.create<mlir::arith::MaxSIOp>(loc, lhs, rhs);
       valueMap.map(maxOp.getResult(), res);
 
+    } else if (auto reduceSumOp = llvm::dyn_cast<tinyton::ReduceSumOp>(op)) {
+      auto operand = valueMap.lookup(reduceSumOp.getOperand());
+      auto ty = operand.getType();
+      auto opAttr = mlir::gpu::AllReduceOperationAttr::get(
+          ctx, mlir::gpu::AllReduceOperation::ADD);
+      mlir::Value res;
+      if (ty.isF16()) {
+        auto f32Ty = mlir::Float32Type::get(ctx);
+        auto ext = builder.create<mlir::arith::ExtFOp>(loc, f32Ty, operand);
+        auto reduced = builder.create<mlir::gpu::AllReduceOp>(loc, ext, opAttr);
+        res = builder.create<mlir::arith::TruncFOp>(loc, ty, reduced);
+      } else {
+        res = builder.create<mlir::gpu::AllReduceOp>(loc, operand, opAttr);
+      }
+      valueMap.map(reduceSumOp.getResult(), res);
+
+    } else if (auto reduceMaxOp = llvm::dyn_cast<tinyton::ReduceMaxOp>(op)) {
+      auto operand = valueMap.lookup(reduceMaxOp.getOperand());
+      auto ty = operand.getType();
+      mlir::gpu::AllReduceOperation reduceKind;
+      if (isFloatType(ty))
+        reduceKind = mlir::gpu::AllReduceOperation::MAXNUMF;
+      else
+        reduceKind = mlir::gpu::AllReduceOperation::MAXSI;
+      auto opAttr =
+          mlir::gpu::AllReduceOperationAttr::get(ctx, reduceKind);
+      mlir::Value res;
+      if (ty.isF16()) {
+        auto f32Ty = mlir::Float32Type::get(ctx);
+        auto ext = builder.create<mlir::arith::ExtFOp>(loc, f32Ty, operand);
+        auto fOpAttr = mlir::gpu::AllReduceOperationAttr::get(
+            ctx, mlir::gpu::AllReduceOperation::MAXNUMF);
+        auto reduced =
+            builder.create<mlir::gpu::AllReduceOp>(loc, ext, fOpAttr);
+        res = builder.create<mlir::arith::TruncFOp>(loc, ty, reduced);
+      } else {
+        res = builder.create<mlir::gpu::AllReduceOp>(loc, operand, opAttr);
+      }
+      valueMap.map(reduceMaxOp.getResult(), res);
+
     } else if (auto loadOp = llvm::dyn_cast<tinyton::LoadOp>(op)) {
       auto addr = valueMap.lookup(loadOp.getAddr());
 

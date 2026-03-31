@@ -349,6 +349,40 @@ std::vector<Instruction> emit(mlir::ModuleOp module,
           {operands,
            llvm::formatv("  .operands R{0}, R{1}", (int)rs, (int)rt)});
 
+    // --- Reductions ---
+
+    } else if (auto reduceSumOp = llvm::dyn_cast<tinyton::ReduceSumOp>(&op)) {
+      uint8_t rd = getReg(reduceSumOp.getResult());
+      uint8_t rs = getReg(reduceSumOp.getOperand());
+      uint8_t typeFlag = isF16Result(reduceSumOp.getResult())    ? 1
+                         : isFloatResult(reduceSumOp.getResult()) ? 0
+                                                                  : 2;
+      // sub-op 0x0F, lower nibble: bit2=0 (sum) | typeFlag
+      uint16_t enc = encodeRI(0xE, rd, 0x0F << 4 | typeFlag);
+      uint16_t operands = (rs << 4);
+      std::string pfx = typeFlag == 1 ? "H" : typeFlag == 0 ? "F" : "";
+      instructions.push_back(
+          {enc, llvm::formatv("{0}REDUCE_SUM R{1}, R{2}", pfx, (int)rd,
+                              (int)rs)});
+      instructions.push_back(
+          {operands, llvm::formatv("  .operands R{0}", (int)rs)});
+
+    } else if (auto reduceMaxOp = llvm::dyn_cast<tinyton::ReduceMaxOp>(&op)) {
+      uint8_t rd = getReg(reduceMaxOp.getResult());
+      uint8_t rs = getReg(reduceMaxOp.getOperand());
+      uint8_t typeFlag = isF16Result(reduceMaxOp.getResult())    ? 1
+                         : isFloatResult(reduceMaxOp.getResult()) ? 0
+                                                                  : 2;
+      // sub-op 0x0F, lower nibble: bit2=1 (max) | typeFlag
+      uint16_t enc = encodeRI(0xE, rd, 0x0F << 4 | (4 | typeFlag));
+      uint16_t operands = (rs << 4);
+      std::string pfx = typeFlag == 1 ? "H" : typeFlag == 0 ? "F" : "";
+      instructions.push_back(
+          {enc, llvm::formatv("{0}REDUCE_MAX R{1}, R{2}", pfx, (int)rd,
+                              (int)rs)});
+      instructions.push_back(
+          {operands, llvm::formatv("  .operands R{0}", (int)rs)});
+
     // --- Memory ---
 
     } else if (auto loadOp = llvm::dyn_cast<tinyton::LoadOp>(&op)) {

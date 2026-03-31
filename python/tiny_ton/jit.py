@@ -12,7 +12,8 @@ import numpy as np
 
 
 _BUILTINS = {"program_id", "arange", "load", "store",
-             "exp", "log", "sqrt", "rsqrt", "abs", "max"}
+             "exp", "log", "sqrt", "rsqrt", "abs", "max",
+             "reduce_sum", "reduce_max"}
 
 # Module aliases that should be treated as the tiny_ton namespace.
 _MODULE_ALIASES = {"tt", "tiny_ton"}
@@ -155,6 +156,11 @@ class KernelVisitor(ast.NodeVisitor):
             a = self._eval(node.args[0])
             b = self._eval(node.args[1])
             return self.builder.emit_max(a, b)
+
+        if builtin == "reduce_sum":
+            return self.builder.emit_reduce_sum(self._eval(node.args[0]))
+        if builtin == "reduce_max":
+            return self.builder.emit_reduce_max(self._eval(node.args[0]))
 
         raise NotImplementedError(f"unsupported builtin: {builtin}")
 

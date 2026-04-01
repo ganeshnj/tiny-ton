@@ -17,6 +17,7 @@ target_link_libraries(TinyTonCompiler
   MLIRArithDialect
   MLIRMathToLLVM
   MLIRMathDialect
+  MLIRMemRefToLLVM
   MLIRControlFlowToLLVM
   MLIRControlFlowDialect
   MLIRFuncToLLVM

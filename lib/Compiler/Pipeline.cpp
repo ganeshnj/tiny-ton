@@ -9,6 +9,7 @@
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
+#include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -16,6 +17,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
@@ -72,12 +74,14 @@ struct CombinedGPULoweringPass
     mlir::populateMathToLLVMConversionPatterns(converter, patterns);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(converter, patterns);
     mlir::populateFuncToLLVMFuncOpConversionPattern(converter, patterns);
+    mlir::populateFinalizeMemRefToLLVMConversionPatterns(converter, patterns);
     mlir::populateGpuToNVVMConversionPatterns(converter, patterns);
 
     mlir::configureGpuToNVVMConversionLegality(target);
     target.addIllegalDialect<mlir::arith::ArithDialect>();
     target.addIllegalDialect<mlir::math::MathDialect>();
     target.addIllegalDialect<mlir::cf::ControlFlowDialect>();
+    target.addIllegalDialect<mlir::memref::MemRefDialect>();
     target.addLegalOp<mlir::UnrealizedConversionCastOp>();
 
     if (mlir::failed(

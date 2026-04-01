@@ -147,7 +147,7 @@ static bool testMaskedLoad() {
 }
 
 static bool testReduceSum() {
-  // tinyton.reduce_sum -> gpu.all_reduce
+  // tinyton.reduce_sum -> shuffle butterfly + shared memory cross-warp reduce
   tinyton::IRBuilder b;
   b.beginFunction("test");
   auto x = b.emitFConst(1.0);
@@ -155,19 +155,17 @@ static bool testReduceSum() {
   b.emitRet();
 
   auto dump = lowerAndDump(b);
-  if (!contains(dump, "gpu.all_reduce")) {
-    std::printf("    missing gpu.all_reduce in:\n%s\n", dump.c_str());
-    return false;
-  }
-  if (!contains(dump, "add")) {
-    std::printf("    missing 'add' op attr in:\n%s\n", dump.c_str());
+  if (!contains(dump, "gpu.shuffle") || !contains(dump, "gpu.barrier") ||
+      !contains(dump, "memref.store") || !contains(dump, "addf")) {
+    std::printf("    missing shuffle/barrier/store/addf in:\n%s\n",
+                dump.c_str());
     return false;
   }
   return true;
 }
 
 static bool testReduceMax() {
-  // tinyton.reduce_max -> gpu.all_reduce
+  // tinyton.reduce_max -> shuffle butterfly + shared memory cross-warp reduce
   tinyton::IRBuilder b;
   b.beginFunction("test");
   auto x = b.emitFConst(1.0);
@@ -175,12 +173,10 @@ static bool testReduceMax() {
   b.emitRet();
 
   auto dump = lowerAndDump(b);
-  if (!contains(dump, "gpu.all_reduce")) {
-    std::printf("    missing gpu.all_reduce in:\n%s\n", dump.c_str());
-    return false;
-  }
-  if (!contains(dump, "maxnumf")) {
-    std::printf("    missing 'maxnumf' op attr in:\n%s\n", dump.c_str());
+  if (!contains(dump, "gpu.shuffle") || !contains(dump, "gpu.barrier") ||
+      !contains(dump, "memref.store") || !contains(dump, "maxnumf")) {
+    std::printf("    missing shuffle/barrier/store/maxnumf in:\n%s\n",
+                dump.c_str());
     return false;
   }
   return true;
@@ -231,8 +227,8 @@ int main() {
     {"thread_id_thread_id", testThreadId},
     {"math_exp", testMathExp},
     {"masked_load", testMaskedLoad},
-    {"reduce_sum_all_reduce", testReduceSum},
-    {"reduce_max_all_reduce", testReduceMax},
+    {"reduce_sum_shuffle_shmem", testReduceSum},
+    {"reduce_max_shuffle_shmem", testReduceMax},
     {"gpu_module_structure", testGPUModuleStructure},
     {"lowering_success", testLoweringSuccess},
   };

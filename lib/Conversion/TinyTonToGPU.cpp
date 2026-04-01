@@ -8,6 +8,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
@@ -96,6 +97,7 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
   ctx->getOrLoadDialect<mlir::LLVM::LLVMDialect>();
   ctx->getOrLoadDialect<mlir::cf::ControlFlowDialect>();
   ctx->getOrLoadDialect<mlir::math::MathDialect>();
+  ctx->getOrLoadDialect<mlir::memref::MemRefDialect>();
 
   auto i32Ty = mlir::IntegerType::get(ctx, 32);
   auto i1Ty = mlir::IntegerType::get(ctx, 1);
@@ -140,6 +142,24 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
       builder.create<mlir::gpu::GPUFuncOp>(loc, kernelName, funcType);
   gpuFunc->setAttr(mlir::gpu::GPUDialect::getKernelFuncAttrName(),
                    builder.getUnitAttr());
+
+  bool hasReduceOps = false;
+  for (auto *op : srcOps) {
+    if (llvm::isa<tinyton::ReduceSumOp, tinyton::ReduceMaxOp>(op)) {
+      hasReduceOps = true;
+      break;
+    }
+  }
+
+  mlir::BlockArgument shmemArg;
+  if (hasReduceOps) {
+    auto f32Ty = mlir::Float32Type::get(ctx);
+    auto addrSpace = mlir::gpu::AddressSpaceAttr::get(
+        ctx, mlir::gpu::AddressSpace::Workgroup);
+    auto shmemTy = mlir::MemRefType::get(
+        {32}, f32Ty, mlir::MemRefLayoutAttrInterface{}, addrSpace);
+    shmemArg = gpuFunc.addWorkgroupAttribution(shmemTy, loc);
+  }
 
   auto *entryBlock = &gpuFunc.getBody().front();
   builder.setInsertionPointToStart(entryBlock);
@@ -359,22 +379,76 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
     } else if (auto reduceSumOp = llvm::dyn_cast<tinyton::ReduceSumOp>(op)) {
       auto operand = valueMap.lookup(reduceSumOp.getOperand());
       auto ty = operand.getType();
+      auto f32Ty = mlir::Float32Type::get(ctx);
       mlir::Value val = operand;
-      if (ty.isF16()) {
-        auto f32Ty = mlir::Float32Type::get(ctx);
+      if (ty.isF16())
         val = builder.create<mlir::arith::ExtFOp>(loc, f32Ty, operand);
-      }
+
+      bool isFloat = isFloatType(val.getType());
+      auto combineSum = [&](mlir::Value a, mlir::Value b) -> mlir::Value {
+        return isFloat
+                   ? (mlir::Value)builder.create<mlir::arith::AddFOp>(loc, a, b)
+                   : (mlir::Value)builder.create<mlir::arith::AddIOp>(loc, a,
+                                                                      b);
+      };
+      mlir::Value identity =
+          isFloat ? makeFloatZero(builder, loc, val.getType())
+                  : (mlir::Value)builder.create<mlir::arith::ConstantIntOp>(
+                        loc, 0, i32Ty);
+
       constexpr int kWarpSize = 32;
       for (int offset : {1, 2, 4, 8, 16}) {
         auto shuf = builder.create<mlir::gpu::ShuffleOp>(
             loc, val, offset, kWarpSize, mlir::gpu::ShuffleMode::XOR);
-        if (isFloatType(val.getType()))
-          val = builder.create<mlir::arith::AddFOp>(loc, val,
-                                                    shuf.getShuffleResult());
-        else
-          val = builder.create<mlir::arith::AddIOp>(loc, val,
-                                                    shuf.getShuffleResult());
+        val = combineSum(val, shuf.getShuffleResult());
       }
+
+      auto tidIdx = builder.create<mlir::gpu::ThreadIdOp>(
+          loc, mlir::gpu::Dimension::x);
+      auto tid =
+          builder.create<mlir::arith::IndexCastOp>(loc, i32Ty, tidIdx);
+      auto c32 = builder.create<mlir::arith::ConstantIntOp>(loc, 32, i32Ty);
+      auto warpId = builder.create<mlir::arith::DivUIOp>(loc, tid, c32);
+      auto laneId = builder.create<mlir::arith::RemUIOp>(loc, tid, c32);
+
+      mlir::Value storeVal =
+          isFloat ? val
+                  : (mlir::Value)builder.create<mlir::arith::BitcastOp>(
+                        loc, f32Ty, val);
+      auto warpIdIdx = builder.create<mlir::arith::IndexCastOp>(
+          loc, builder.getIndexType(), warpId);
+      builder.create<mlir::memref::StoreOp>(loc, storeVal, shmemArg,
+                                            mlir::ValueRange{warpIdIdx});
+
+      builder.create<mlir::gpu::BarrierOp>(loc);
+
+      auto blockDimIdx = builder.create<mlir::gpu::BlockDimOp>(
+          loc, mlir::gpu::Dimension::x);
+      auto blockDim =
+          builder.create<mlir::arith::IndexCastOp>(loc, i32Ty, blockDimIdx);
+      auto numWarps = builder.create<mlir::arith::DivUIOp>(loc, blockDim, c32);
+      auto inBounds = builder.create<mlir::arith::CmpIOp>(
+          loc, mlir::arith::CmpIPredicate::ult, laneId, numWarps);
+      auto c0 = builder.create<mlir::arith::ConstantIntOp>(loc, 0, i32Ty);
+      auto safeLane = builder.create<mlir::arith::SelectOp>(loc, inBounds,
+                                                            laneId, c0);
+      auto safeLaneIdx = builder.create<mlir::arith::IndexCastOp>(
+          loc, builder.getIndexType(), safeLane);
+      auto loadedF32 = builder.create<mlir::memref::LoadOp>(
+          loc, shmemArg, mlir::ValueRange{safeLaneIdx});
+      mlir::Value loaded =
+          isFloat ? (mlir::Value)loadedF32
+                  : (mlir::Value)builder.create<mlir::arith::BitcastOp>(
+                        loc, i32Ty, loadedF32);
+      val = builder.create<mlir::arith::SelectOp>(loc, inBounds, loaded,
+                                                  identity);
+
+      for (int offset : {1, 2, 4, 8, 16}) {
+        auto shuf = builder.create<mlir::gpu::ShuffleOp>(
+            loc, val, offset, kWarpSize, mlir::gpu::ShuffleMode::XOR);
+        val = combineSum(val, shuf.getShuffleResult());
+      }
+
       if (ty.isF16())
         val = builder.create<mlir::arith::TruncFOp>(loc, ty, val);
       valueMap.map(reduceSumOp.getResult(), val);
@@ -382,22 +456,83 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
     } else if (auto reduceMaxOp = llvm::dyn_cast<tinyton::ReduceMaxOp>(op)) {
       auto operand = valueMap.lookup(reduceMaxOp.getOperand());
       auto ty = operand.getType();
+      auto f32Ty = mlir::Float32Type::get(ctx);
       mlir::Value val = operand;
-      if (ty.isF16()) {
-        auto f32Ty = mlir::Float32Type::get(ctx);
+      if (ty.isF16())
         val = builder.create<mlir::arith::ExtFOp>(loc, f32Ty, operand);
+
+      bool isFloat = isFloatType(val.getType());
+      auto combineMax = [&](mlir::Value a, mlir::Value b) -> mlir::Value {
+        return isFloat ? (mlir::Value)builder.create<mlir::arith::MaxNumFOp>(
+                             loc, a, b)
+                       : (mlir::Value)builder.create<mlir::arith::MaxSIOp>(
+                             loc, a, b);
+      };
+      mlir::Value identity;
+      if (isFloat) {
+        const auto &sem =
+            llvm::cast<mlir::FloatType>(val.getType()).getFloatSemantics();
+        identity = builder.create<mlir::arith::ConstantFloatOp>(
+            loc, llvm::APFloat::getInf(sem, true),
+            llvm::cast<mlir::FloatType>(val.getType()));
+      } else {
+        identity = builder.create<mlir::arith::ConstantIntOp>(
+            loc, std::numeric_limits<int32_t>::min(), i32Ty);
       }
+
       constexpr int kWarpSize = 32;
       for (int offset : {1, 2, 4, 8, 16}) {
         auto shuf = builder.create<mlir::gpu::ShuffleOp>(
             loc, val, offset, kWarpSize, mlir::gpu::ShuffleMode::XOR);
-        if (isFloatType(val.getType()))
-          val = builder.create<mlir::arith::MaxNumFOp>(loc, val,
-                                                       shuf.getShuffleResult());
-        else
-          val = builder.create<mlir::arith::MaxSIOp>(loc, val,
-                                                     shuf.getShuffleResult());
+        val = combineMax(val, shuf.getShuffleResult());
       }
+
+      auto tidIdx = builder.create<mlir::gpu::ThreadIdOp>(
+          loc, mlir::gpu::Dimension::x);
+      auto tid =
+          builder.create<mlir::arith::IndexCastOp>(loc, i32Ty, tidIdx);
+      auto c32 = builder.create<mlir::arith::ConstantIntOp>(loc, 32, i32Ty);
+      auto warpId = builder.create<mlir::arith::DivUIOp>(loc, tid, c32);
+      auto laneId = builder.create<mlir::arith::RemUIOp>(loc, tid, c32);
+
+      mlir::Value storeVal =
+          isFloat ? val
+                  : (mlir::Value)builder.create<mlir::arith::BitcastOp>(
+                        loc, f32Ty, val);
+      auto warpIdIdx = builder.create<mlir::arith::IndexCastOp>(
+          loc, builder.getIndexType(), warpId);
+      builder.create<mlir::memref::StoreOp>(loc, storeVal, shmemArg,
+                                            mlir::ValueRange{warpIdIdx});
+
+      builder.create<mlir::gpu::BarrierOp>(loc);
+
+      auto blockDimIdx = builder.create<mlir::gpu::BlockDimOp>(
+          loc, mlir::gpu::Dimension::x);
+      auto blockDim =
+          builder.create<mlir::arith::IndexCastOp>(loc, i32Ty, blockDimIdx);
+      auto numWarps = builder.create<mlir::arith::DivUIOp>(loc, blockDim, c32);
+      auto inBounds = builder.create<mlir::arith::CmpIOp>(
+          loc, mlir::arith::CmpIPredicate::ult, laneId, numWarps);
+      auto c0 = builder.create<mlir::arith::ConstantIntOp>(loc, 0, i32Ty);
+      auto safeLane = builder.create<mlir::arith::SelectOp>(loc, inBounds,
+                                                            laneId, c0);
+      auto safeLaneIdx = builder.create<mlir::arith::IndexCastOp>(
+          loc, builder.getIndexType(), safeLane);
+      auto loadedF32 = builder.create<mlir::memref::LoadOp>(
+          loc, shmemArg, mlir::ValueRange{safeLaneIdx});
+      mlir::Value loaded =
+          isFloat ? (mlir::Value)loadedF32
+                  : (mlir::Value)builder.create<mlir::arith::BitcastOp>(
+                        loc, i32Ty, loadedF32);
+      val = builder.create<mlir::arith::SelectOp>(loc, inBounds, loaded,
+                                                  identity);
+
+      for (int offset : {1, 2, 4, 8, 16}) {
+        auto shuf = builder.create<mlir::gpu::ShuffleOp>(
+            loc, val, offset, kWarpSize, mlir::gpu::ShuffleMode::XOR);
+        val = combineMax(val, shuf.getShuffleResult());
+      }
+
       if (ty.isF16())
         val = builder.create<mlir::arith::TruncFOp>(loc, ty, val);
       valueMap.map(reduceMaxOp.getResult(), val);

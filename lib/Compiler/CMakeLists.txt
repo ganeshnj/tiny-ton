@@ -12,6 +12,7 @@ target_link_libraries(TinyTonCompiler
   MLIRSupport
   MLIRPass
   MLIRGPUDialect
+  MLIRGPUTransforms
   MLIRGPUToNVVMTransforms
   MLIRArithToLLVM
   MLIRArithDialect

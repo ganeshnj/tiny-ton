@@ -23,7 +23,9 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
+#include "mlir/Dialect/GPU/Transforms/Passes.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/IR/LLVMContext.h"
@@ -63,6 +65,14 @@ struct CombinedGPULoweringPass
   void runOnOperation() override {
     auto gpuModule = getOperation();
     auto *ctx = gpuModule.getContext();
+
+    {
+      mlir::RewritePatternSet gpuPatterns(ctx);
+      mlir::populateGpuAllReducePatterns(gpuPatterns);
+      if (mlir::failed(mlir::applyPatternsAndFoldGreedily(
+              gpuModule, std::move(gpuPatterns))))
+        return signalPassFailure();
+    }
 
     mlir::LLVMTypeConverter converter(ctx);
     mlir::ConversionTarget target(*ctx);

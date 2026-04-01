@@ -64,6 +64,12 @@ class KernelVisitor(ast.NodeVisitor):
         assert isinstance(target, ast.Name)
         self.symbols[target.id] = value
 
+    def visit_AnnAssign(self, node: ast.AnnAssign):
+        assert node.value is not None, "annotation-only statements not supported"
+        value = self._eval(node.value)
+        assert isinstance(node.target, ast.Name)
+        self.symbols[node.target.id] = value
+
     def visit_Expr(self, node: ast.Expr):
         self._eval(node.value)
 

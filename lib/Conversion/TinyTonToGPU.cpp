@@ -359,42 +359,48 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
     } else if (auto reduceSumOp = llvm::dyn_cast<tinyton::ReduceSumOp>(op)) {
       auto operand = valueMap.lookup(reduceSumOp.getOperand());
       auto ty = operand.getType();
-      auto opAttr = mlir::gpu::AllReduceOperationAttr::get(
-          ctx, mlir::gpu::AllReduceOperation::ADD);
-      mlir::Value res;
+      mlir::Value val = operand;
       if (ty.isF16()) {
         auto f32Ty = mlir::Float32Type::get(ctx);
-        auto ext = builder.create<mlir::arith::ExtFOp>(loc, f32Ty, operand);
-        auto reduced = builder.create<mlir::gpu::AllReduceOp>(loc, ext, opAttr);
-        res = builder.create<mlir::arith::TruncFOp>(loc, ty, reduced);
-      } else {
-        res = builder.create<mlir::gpu::AllReduceOp>(loc, operand, opAttr);
+        val = builder.create<mlir::arith::ExtFOp>(loc, f32Ty, operand);
       }
-      valueMap.map(reduceSumOp.getResult(), res);
+      constexpr int kWarpSize = 32;
+      for (int offset : {1, 2, 4, 8, 16}) {
+        auto shuf = builder.create<mlir::gpu::ShuffleOp>(
+            loc, val, offset, kWarpSize, mlir::gpu::ShuffleMode::XOR);
+        if (isFloatType(val.getType()))
+          val = builder.create<mlir::arith::AddFOp>(loc, val,
+                                                    shuf.getShuffleResult());
+        else
+          val = builder.create<mlir::arith::AddIOp>(loc, val,
+                                                    shuf.getShuffleResult());
+      }
+      if (ty.isF16())
+        val = builder.create<mlir::arith::TruncFOp>(loc, ty, val);
+      valueMap.map(reduceSumOp.getResult(), val);
 
     } else if (auto reduceMaxOp = llvm::dyn_cast<tinyton::ReduceMaxOp>(op)) {
       auto operand = valueMap.lookup(reduceMaxOp.getOperand());
       auto ty = operand.getType();
-      mlir::gpu::AllReduceOperation reduceKind;
-      if (isFloatType(ty))
-        reduceKind = mlir::gpu::AllReduceOperation::MAXNUMF;
-      else
-        reduceKind = mlir::gpu::AllReduceOperation::MAXSI;
-      auto opAttr =
-          mlir::gpu::AllReduceOperationAttr::get(ctx, reduceKind);
-      mlir::Value res;
+      mlir::Value val = operand;
       if (ty.isF16()) {
         auto f32Ty = mlir::Float32Type::get(ctx);
-        auto ext = builder.create<mlir::arith::ExtFOp>(loc, f32Ty, operand);
-        auto fOpAttr = mlir::gpu::AllReduceOperationAttr::get(
-            ctx, mlir::gpu::AllReduceOperation::MAXNUMF);
-        auto reduced =
-            builder.create<mlir::gpu::AllReduceOp>(loc, ext, fOpAttr);
-        res = builder.create<mlir::arith::TruncFOp>(loc, ty, reduced);
-      } else {
-        res = builder.create<mlir::gpu::AllReduceOp>(loc, operand, opAttr);
+        val = builder.create<mlir::arith::ExtFOp>(loc, f32Ty, operand);
       }
-      valueMap.map(reduceMaxOp.getResult(), res);
+      constexpr int kWarpSize = 32;
+      for (int offset : {1, 2, 4, 8, 16}) {
+        auto shuf = builder.create<mlir::gpu::ShuffleOp>(
+            loc, val, offset, kWarpSize, mlir::gpu::ShuffleMode::XOR);
+        if (isFloatType(val.getType()))
+          val = builder.create<mlir::arith::MaxNumFOp>(loc, val,
+                                                       shuf.getShuffleResult());
+        else
+          val = builder.create<mlir::arith::MaxSIOp>(loc, val,
+                                                     shuf.getShuffleResult());
+      }
+      if (ty.isF16())
+        val = builder.create<mlir::arith::TruncFOp>(loc, ty, val);
+      valueMap.map(reduceMaxOp.getResult(), val);
 
     } else if (auto loadOp = llvm::dyn_cast<tinyton::LoadOp>(op)) {
       auto addr = valueMap.lookup(loadOp.getAddr());

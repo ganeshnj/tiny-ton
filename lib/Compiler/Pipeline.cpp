@@ -6,6 +6,7 @@
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
+#include "mlir/Conversion/GPUCommon/GPUCommonPass.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
@@ -67,6 +68,18 @@ struct CombinedGPULoweringPass
     auto *ctx = gpuModule.getContext();
 
     mlir::LLVMTypeConverter converter(ctx);
+    mlir::populateGpuMemorySpaceAttributeConversions(
+        converter, [](mlir::gpu::AddressSpace space) -> unsigned {
+          switch (space) {
+          case mlir::gpu::AddressSpace::Global:
+            return 1;
+          case mlir::gpu::AddressSpace::Workgroup:
+            return 3;
+          case mlir::gpu::AddressSpace::Private:
+            return 5;
+          }
+          return 0;
+        });
     mlir::ConversionTarget target(*ctx);
     mlir::RewritePatternSet patterns(ctx);
 

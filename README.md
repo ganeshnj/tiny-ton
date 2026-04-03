@@ -85,8 +85,8 @@ Each operation is a single kernel, tested independently against NumPy.
 - [x] `tt.reduce_sum` — warp-shuffle / `gpu.all_reduce` reduction
 - [x] `tt.reduce_max` — same as above with max
 - [x] `tt.relu` — element-wise `max(x, 0)`
-- [ ] `tt.gather` — embedding lookup by index
-- [ ] `tt.dot` / matvec — dot product via `reduce_sum`
+- [x] `tt.gather` — embedding lookup by index
+- [x] `tt.dot` / matvec — dot product via `reduce_sum`
 - [ ] `softmax` — composed: `reduce_max` → `sub` → `exp` → `reduce_sum` → `div` (5 launches)
 - [ ] `rmsnorm` — composed: `square` → `reduce_sum` → `rsqrt` → `scale` (4 launches)
 - [ ] `linear` — matvec using dot (one output per block)

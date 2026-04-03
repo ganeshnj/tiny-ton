@@ -90,7 +90,7 @@ Each operation is a single kernel, tested independently against NumPy.
 - [x] `softmax` — composed: `reduce_max` → `sub` → `exp` → `reduce_sum` → `div` (5 launches)
 - [x] `rmsnorm` — composed: `square` → `reduce_sum` → `rsqrt` → `scale` (4 launches)
 - [x] `linear` — matvec using dot (one output per block)
-- [ ] `cross_entropy` — composed: `softmax` → `gather` → `-log`
+- [x] `cross_entropy` — composed: `softmax` → `gather` → `-log`
 - [ ] `attention` — composed: linear projections + dot + softmax + weighted sum
 
 ### Stage 2 — Wire into microgpt

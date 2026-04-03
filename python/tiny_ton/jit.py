@@ -12,7 +12,7 @@ import numpy as np
 
 
 _BUILTINS = {"program_id", "arange", "load", "store",
-             "exp", "log", "sqrt", "rsqrt", "abs", "max",
+             "exp", "log", "sqrt", "rsqrt", "abs", "max", "relu",
              "reduce_sum", "reduce_max"}
 
 # Module aliases that should be treated as the tiny_ton namespace.
@@ -162,6 +162,13 @@ class KernelVisitor(ast.NodeVisitor):
             a = self._eval(node.args[0])
             b = self._eval(node.args[1])
             return self.builder.emit_max(a, b)
+        if builtin == "relu":
+            x = self._eval(node.args[0])
+            if self._kernel_dtype == "f16":
+                zero = self.builder.emit_hconst(0.0)
+            else:
+                zero = self.builder.emit_fconst(0.0)
+            return self.builder.emit_max(x, zero)
 
         if builtin == "reduce_sum":
             return self.builder.emit_reduce_sum(self._eval(node.args[0]))

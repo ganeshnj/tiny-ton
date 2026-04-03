@@ -82,9 +82,9 @@ Goal: run [Karpathy's microgpt](https://gist.github.com/karpathy/8627fe009c40f57
 
 Each operation is a single kernel, tested independently against NumPy.
 
-- [ ] `tt.reduce_sum` — warp-shuffle / `gpu.all_reduce` reduction
-- [ ] `tt.reduce_max` — same as above with max
-- [ ] `tt.relu` — element-wise `max(x, 0)`
+- [x] `tt.reduce_sum` — warp-shuffle / `gpu.all_reduce` reduction
+- [x] `tt.reduce_max` — same as above with max
+- [x] `tt.relu` — element-wise `max(x, 0)`
 - [ ] `tt.gather` — embedding lookup by index
 - [ ] `tt.dot` / matvec — dot product via `reduce_sum`
 - [ ] `softmax` — composed: `reduce_max` → `sub` → `exp` → `reduce_sum` → `div` (5 launches)

@@ -25,6 +25,11 @@ def store(ptr, val, mask=None):
     raise NotImplementedError("store is only valid inside a @tt.jit kernel")
 
 
+def relu(x):
+    """Element-wise ReLU: max(x, 0)."""
+    raise NotImplementedError("relu is only valid inside a @tt.jit kernel")
+
+
 def reduce_sum(x):
     """Sum reduction across all threads in the block."""
     raise NotImplementedError("reduce_sum is only valid inside a @tt.jit kernel")
@@ -41,6 +46,7 @@ __all__ = [
     "arange",
     "load",
     "store",
+    "relu",
     "reduce_sum",
     "reduce_max",
 ]

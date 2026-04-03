@@ -88,7 +88,7 @@ Each operation is a single kernel, tested independently against NumPy.
 - [x] `tt.gather` — embedding lookup by index
 - [x] `tt.dot` / matvec — dot product via `reduce_sum`
 - [x] `softmax` — composed: `reduce_max` → `sub` → `exp` → `reduce_sum` → `div` (5 launches)
-- [ ] `rmsnorm` — composed: `square` → `reduce_sum` → `rsqrt` → `scale` (4 launches)
+- [x] `rmsnorm` — composed: `square` → `reduce_sum` → `rsqrt` → `scale` (4 launches)
 - [ ] `linear` — matvec using dot (one output per block)
 - [ ] `cross_entropy` — composed: `softmax` → `gather` → `-log`
 - [ ] `attention` — composed: linear projections + dot + softmax + weighted sum

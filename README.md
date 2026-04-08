@@ -98,10 +98,10 @@ Each operation is a single kernel, tested independently against NumPy.
 Replace microgpt's Python ops one by one with tiny-ton GPU kernels.
 Each op is still a separate launch — no fusion yet.
 
-- [ ] Replace `softmax()`, `rmsnorm()`, `linear()` with GPU kernels
-- [ ] Replace attention + MLP with composed GPU launches
-- [ ] Full forward pass end-to-end on GPU
-- [ ] Benchmark vs Python CPU baseline
+- [x] Replace `softmax()`, `rmsnorm()`, `linear()` with GPU kernels
+- [x] Replace attention + MLP with composed GPU launches
+- [x] Full forward pass end-to-end on GPU
+- [x] Benchmark vs Python CPU baseline
 
 ### Stage 3 — Optimize for GPU
 

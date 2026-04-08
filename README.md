@@ -112,8 +112,8 @@ Reduce launch overhead, fuse kernels, improve throughput.
 #### Layer 1 — Reduce launch count (pure Python kernel work)
 
 - [x] Fused softmax — 5 launches → 1 (warp shuffle: reduce max, sub, exp, reduce sum, div all in registers) — [`examples/fused_softmax_test.py`](examples/fused_softmax_test.py), [`docs/fused-softmax.md`](docs/fused-softmax.md)
-- [ ] Fused rmsnorm — 4 launches → 1 (warp shuffle: square, reduce sum, rsqrt, scale in registers)
-- [ ] Fused per-head attention — ~8 launches → 1-2 (scores + scale + softmax + weighted sum in one kernel)
+- [x] Fused rmsnorm — 4 launches → 1 (warp shuffle: square, reduce sum, rsqrt, scale in registers) — [`examples/fused_rmsnorm_test.py`](examples/fused_rmsnorm_test.py), [`docs/fused-rmsnorm.md`](docs/fused-rmsnorm.md)
+- [x] Fused per-head attention — 12 launches → 7 (score scaling + softmax fused into one kernel) — [`examples/fused_attention_test.py`](examples/fused_attention_test.py), [`docs/fused-attention.md`](docs/fused-attention.md)
 
 Expected: ~3x fewer kernel launches, ~3x speedup.
 

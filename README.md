@@ -107,12 +107,40 @@ Each op is still a separate launch — no fusion yet.
 
 Reduce launch overhead, fuse kernels, improve throughput.
 
-- [ ] Fused softmax (single kernel)
-- [ ] Fused rmsnorm (single kernel)
-- [ ] Tiled matmul with shared memory + barriers
-- [ ] Fused attention (Flash-attention style)
-- [ ] Fused MLP + transformer block
-- [ ] Automatic operator fusion pass in the compiler
+**Benchmark context:** Stage 2 ran 8,800 kernel launches for 20 inference samples at n_embd=16. Overhead dominated (~150µs/launch × 8,800 = ~1,320s). GPU ran 487x slower than CPU. Every item below attacks this.
+
+#### Layer 1 — Reduce launch count (pure Python kernel work)
+
+- [ ] Fused softmax — 5 launches → 1 (warp shuffle: reduce max, sub, exp, reduce sum, div all in registers)
+- [ ] Fused rmsnorm — 4 launches → 1 (warp shuffle: square, reduce sum, rsqrt, scale in registers)
+- [ ] Fused per-head attention — ~8 launches → 1-2 (scores + scale + softmax + weighted sum in one kernel)
+
+Expected: ~3x fewer kernel launches, ~3x speedup.
+
+#### Layer 2 — Scale up model size (no code changes)
+
+- [ ] Test at n_embd=64, n_embd=128 to find the GPU crossover point
+  - n_embd=16: GPU 487x slower (4x useful work per launch)
+  - n_embd=64: estimated ~30x slower
+  - n_embd=512+: GPU wins
+
+#### Layer 3 — Configurable block size (compiler change)
+
+- [ ] Make block size a kernel `constexpr` parameter (like Triton's `tl.constexpr`) — today it is hardcoded to 64, so 75% of threads are idle at n_embd=16
+- [ ] Requires changes in `jit.py` (parse `constexpr` arg) and the IR builder
+
+#### Layer 4 — Tiled matmul with shared memory (C++ MLIR change)
+
+- [ ] Tiled matmul with shared memory + barriers — reuse each weight row across multiple threads via shared memory; impactful at n_embd >= 64
+- [ ] Requires adding `gpu.barrier` and shared memory ops to the MLIR pipeline
+
+#### Layer 5 — Flash Attention (algorithmic, longer sequences)
+
+- [ ] Flash Attention style — tiles the KV cache into chunks, accumulates softmax numerator/denominator across chunks; needed when seq_len > block_size (64)
+
+#### Layer 6 — Automatic fusion pass (compiler infrastructure)
+
+- [ ] Pattern-matching fusion pass on the `tinyton` MLIR dialect — detects `exp` → `reduce_sum` → `div` etc. and merges them automatically, like XLA/TVM/torch.compile
 
 ## License
 

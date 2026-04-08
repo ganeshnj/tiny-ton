@@ -10,22 +10,19 @@ import tiny_ton as tt
 # --- fused softmax: 1 kernel launch -----------------------------------------
 
 @tt.jit
-def fused_softmax_kernel(src, dst, N, n_masked_ptr):
+def fused_softmax_kernel(src, dst, N):
     tid  = tt.arange(0, 64)
     mask = tid < N
-    x    = tt.load(src + tid, mask=mask)
+    x    = tt.load(src + tid, mask=mask, other=-float('inf'))
     mx   = tt.reduce_max(x)
     e    = tt.exp(x - mx)
     s    = tt.reduce_sum(e)
-    nm   = tt.load(n_masked_ptr)               # 64 - N as float
-    s    = s - nm * tt.exp(0.0 - mx)           # subtract masked contribution
     tt.store(dst + tid, e / s, mask=mask)
 
 
 def fused_softmax(x, out, N):
     """Single kernel launch. Requires N <= 64."""
-    n_masked = np.array([float(64 - N)], dtype=np.float32)
-    fused_softmax_kernel[(1,)](x, out, N, n_masked)
+    fused_softmax_kernel[(1,)](x, out, N)
 
 
 # --- 5-kernel softmax (Stage 1 baseline) ------------------------------------

@@ -178,11 +178,13 @@ def TinyTon_ThreadIdOp : TinyTon_Op<"thread_id", [Pure]> {
 
 // --- Memory ----------------------------------------------------------------
 
-def TinyTon_LoadOp : TinyTon_Op<"load", []> {
+def TinyTon_LoadOp : TinyTon_Op<"load",
+    [AttrSizedOperandSegments]> {
   let summary = "Load a value from data memory.";
-  let arguments = (ins I32:$addr, Optional<I32>:$mask);
+  let arguments = (ins I32:$addr, Optional<I32>:$mask,
+                       Optional<TinyTon_ScalarType>:$other);
   let results = (outs TinyTon_ScalarType:$result);
-  let assemblyFormat = "$addr (`,` $mask^)? attr-dict `:` type($result)";
+  let assemblyFormat = "$addr (`,` $mask^)? (`other` $other^ `:` type($other))? attr-dict `:` type($result)";
 }
 
 def TinyTon_StoreOp : TinyTon_Op<"store", []> {

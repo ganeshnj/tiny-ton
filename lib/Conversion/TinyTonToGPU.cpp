@@ -560,15 +560,18 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
         region.push_back(thenBlock);
         region.push_back(mergeBlock);
 
-        mlir::Value zero;
-        if (isFloatType(elemTy))
-          zero = makeFloatZero(builder, loc, elemTy);
-        else
-          zero = builder.create<mlir::arith::ConstantIntOp>(loc, 0, i32Ty);
+        mlir::Value fallback;
+        if (loadOp.getOther()) {
+          fallback = valueMap.lookup(loadOp.getOther());
+        } else if (isFloatType(elemTy)) {
+          fallback = makeFloatZero(builder, loc, elemTy);
+        } else {
+          fallback = builder.create<mlir::arith::ConstantIntOp>(loc, 0, i32Ty);
+        }
 
         builder.create<mlir::cf::CondBranchOp>(loc, maskBit, thenBlock,
                                                mergeBlock,
-                                               mlir::ValueRange{zero});
+                                               mlir::ValueRange{fallback});
 
         builder.setInsertionPointToStart(thenBlock);
         auto loaded = builder.create<mlir::LLVM::LoadOp>(loc, elemTy, addr);

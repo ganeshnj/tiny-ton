@@ -41,7 +41,7 @@ static bool testReduceSumF32() {
   auto inBase = b.emitArg(0, true, tinyton::ElementType::F32);
   auto tid = b.emitThreadId(0);
   auto addr = b.emitAdd(inBase, tid);
-  auto val = b.emitLoad(addr, {}, tinyton::ElementType::F32);
+  auto val = b.emitLoad(addr, {}, {}, tinyton::ElementType::F32);
   auto total = b.emitReduceSum(val);
   auto outAddr = b.emitArg(1, true, tinyton::ElementType::F32);
   b.emitStore(outAddr, total);
@@ -70,7 +70,7 @@ static bool testReduceMaxF32() {
   auto inBase = b.emitArg(0, true, tinyton::ElementType::F32);
   auto tid = b.emitThreadId(0);
   auto addr = b.emitAdd(inBase, tid);
-  auto val = b.emitLoad(addr, {}, tinyton::ElementType::F32);
+  auto val = b.emitLoad(addr, {}, {}, tinyton::ElementType::F32);
   auto mx = b.emitReduceMax(val);
   auto outAddr = b.emitArg(1, true, tinyton::ElementType::F32);
   b.emitStore(outAddr, mx);

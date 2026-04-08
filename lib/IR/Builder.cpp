@@ -178,10 +178,10 @@ mlir::Value IRBuilder::emitReduceMax(mlir::Value operand) {
 }
 
 mlir::Value IRBuilder::emitLoad(mlir::Value addr, mlir::Value mask,
-                                ElementType elemType) {
+                                mlir::Value other, ElementType elemType) {
   auto loc = mlir::UnknownLoc::get(&impl_->context);
   mlir::Type resTy = elementTypeToMLIR(elemType, &impl_->context);
-  return impl_->builder->create<tinyton::LoadOp>(loc, resTy, addr, mask)
+  return impl_->builder->create<tinyton::LoadOp>(loc, resTy, addr, mask, other)
       .getResult();
 }
 

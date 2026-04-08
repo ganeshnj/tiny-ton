@@ -15,7 +15,7 @@ def arange(start: int, end: int):
     raise NotImplementedError("arange is only valid inside a @tt.jit kernel")
 
 
-def load(ptr, mask=None):
+def load(ptr, mask=None, other=None):
     """Load values from memory at the given pointer."""
     raise NotImplementedError("load is only valid inside a @tt.jit kernel")
 

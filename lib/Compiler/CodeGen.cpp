@@ -393,8 +393,12 @@ std::vector<Instruction> emit(mlir::ModuleOp module,
 
       if (loadOp.getMask()) {
         uint8_t rm = getReg(loadOp.getMask());
-        if (resIsF16) {
-          // Masked f16 load: HCONST rd, 0.0
+        if (loadOp.getOther()) {
+          uint8_t ro = getReg(loadOp.getOther());
+          instructions.push_back(
+              {encodeRRR(0x1, rd, ro, 0),
+               llvm::formatv("MOV R{0}, R{1}", (int)rd, (int)ro).str()});
+        } else if (resIsF16) {
           uint16_t hbits = halfBits(0.0f);
           instructions.push_back(
               {encodeRI(0xE, rd, 0x03 << 4),

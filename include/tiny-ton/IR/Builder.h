@@ -44,6 +44,7 @@ public:
   mlir::Value emitReduceMax(mlir::Value operand);
 
   mlir::Value emitLoad(mlir::Value addr, mlir::Value mask = {},
+                       mlir::Value other = {},
                        ElementType elemType = ElementType::I32);
   void emitStore(mlir::Value addr, mlir::Value val, mlir::Value mask = {});
 

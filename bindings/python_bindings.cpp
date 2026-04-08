@@ -115,14 +115,18 @@ PYBIND11_MODULE(_tiny_ton_core, m) {
            })
       .def("emit_load",
            [](tinyton::IRBuilder &self, PyValue addr, py::object mask,
-              const std::string &dtype) {
+              py::object other, const std::string &dtype) {
              mlir::Value maskVal;
              if (!mask.is_none())
                maskVal = mask.cast<PyValue>().val;
+             mlir::Value otherVal;
+             if (!other.is_none())
+               otherVal = other.cast<PyValue>().val;
              auto et = tinyton::elementTypeFromString(dtype);
-             return PyValue{self.emitLoad(addr.val, maskVal, et)};
+             return PyValue{self.emitLoad(addr.val, maskVal, otherVal, et)};
            },
            py::arg("addr"), py::arg("mask") = py::none(),
+           py::arg("other") = py::none(),
            py::arg("dtype") = "i32")
       .def("emit_store",
            [](tinyton::IRBuilder &self, PyValue addr, PyValue val,

@@ -111,6 +111,13 @@ class KernelVisitor(ast.NodeVisitor):
                 return self.builder.emit_cmp_lt(lhs, rhs)
             raise NotImplementedError(f"unsupported cmp: {type(node.ops[0])}")
 
+        if isinstance(node, ast.UnaryOp):
+            operand = self._eval(node.operand)
+            if isinstance(node.op, ast.USub):
+                zero = self.builder.emit_fconst(0.0)
+                return self.builder.emit_sub(zero, operand)
+            raise NotImplementedError(f"unsupported unaryop: {type(node.op)}")
+
         if isinstance(node, ast.Call):
             return self._eval_call(node)
 
@@ -121,6 +128,12 @@ class KernelVisitor(ast.NodeVisitor):
     # ------------------------------------------------------------------
 
     def _eval_call(self, node: ast.Call):
+        if (isinstance(node.func, ast.Name) and node.func.id == "float"
+                and len(node.args) == 1
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == 'inf'):
+            return self.builder.emit_fconst(float('inf'))
+
         builtin = self._resolve_builtin(node.func)
         if builtin is None:
             raise NotImplementedError(f"unsupported call: {ast.dump(node.func)}")
@@ -138,7 +151,8 @@ class KernelVisitor(ast.NodeVisitor):
         if builtin == "load":
             addr = self._eval(node.args[0])
             mask = self._get_kwarg(node, "mask")
-            return self.builder.emit_load(addr, mask=mask,
+            other = self._get_kwarg(node, "other")
+            return self.builder.emit_load(addr, mask=mask, other=other,
                                           dtype=self._kernel_dtype)
 
         if builtin == "store":

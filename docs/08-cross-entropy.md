@@ -104,7 +104,7 @@ PTX: 7 separate kernel launches via cuLaunchKernel
 
 | File | What |
 |------|------|
-| `docs/cross-entropy.md` | This design doc |
+| `docs/08-cross-entropy.md` | This design doc |
 | `examples/cross_entropy_test.py` | Standalone test: 7-launch cross_entropy vs NumPy |
 
 No C++ files changed. No new builtins in `jit.py`. All kernels are user-written.

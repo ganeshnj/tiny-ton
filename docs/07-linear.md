@@ -72,7 +72,7 @@ Same as dot/matvec — a single block loads the full input row. microgpt uses `n
 
 | File | What |
 |------|------|
-| `docs/linear.md` | This design doc |
+| `docs/07-linear.md` | This design doc |
 | `examples/linear_test.py` | Test at microgpt scale + chained layers |
 
 No C++ files changed. No new builtins. Kernel is identical to `matvec_kernel`.

@@ -119,7 +119,7 @@ PTX: 12 separate kernel launches via cuLaunchKernel
 
 | File | What |
 |------|------|
-| `docs/attention.md` | This design doc |
+| `docs/09-attention.md` | This design doc |
 | `examples/attention_test.py` | Standalone test: 12-launch attention vs NumPy |
 
 No C++ files changed. No new builtins in `jit.py`. All kernels are user-written.

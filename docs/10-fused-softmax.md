@@ -110,5 +110,5 @@ For N > 64, the existing 5-kernel version is still required.
 
 | File | What |
 |------|------|
-| `docs/fused-softmax.md` | This design doc |
+| `docs/10-fused-softmax.md` | This design doc |
 | `examples/fused_softmax_test.py` | Standalone test vs NumPy |

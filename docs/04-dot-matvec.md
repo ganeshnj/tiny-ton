@@ -104,7 +104,7 @@ All attention projections (`attn_wq`, `attn_wk`, `attn_wv`, `attn_wo`), MLP laye
 
 | File | What |
 |------|------|
-| `docs/dot-matvec.md` | This design doc |
+| `docs/04-dot-matvec.md` | This design doc |
 | `examples/dot_matvec_test.py` | Standalone test vs `np.dot` and `W @ x` |
 
 No C++ files changed. No new builtins — these are user-written kernels.

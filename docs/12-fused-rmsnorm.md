@@ -67,5 +67,5 @@ For N > 64 the existing 4-kernel version is still required.
 
 | File | What |
 |------|------|
-| `docs/fused-rmsnorm.md` | This design doc |
+| `docs/12-fused-rmsnorm.md` | This design doc |
 | `examples/fused_rmsnorm_test.py` | Standalone test vs NumPy and 4-kernel version |

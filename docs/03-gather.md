@@ -72,7 +72,7 @@ PTX: ld.global.f32 with computed address
 
 | File | What |
 |------|------|
-| `docs/gather.md` | This design doc |
+| `docs/03-gather.md` | This design doc |
 | `examples/gather_test.py` | Standalone test vs `table[index]` in NumPy |
 
 No C++ files changed. No new builtins in `jit.py` — gather is a user-written kernel.

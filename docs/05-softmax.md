@@ -107,7 +107,7 @@ PTX: 5 separate kernel launches via cuLaunchKernel
 
 | File | What |
 |------|------|
-| `docs/softmax.md` | This design doc |
+| `docs/05-softmax.md` | This design doc |
 | `examples/softmax_test.py` | Standalone test: 5-launch softmax vs NumPy |
 
 No C++ files changed. No new builtins in `jit.py`. All kernels are user-written.

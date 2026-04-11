@@ -66,5 +66,5 @@ Score vector size = seq_len <= 64. Microgpt: max seq_len = 16.
 
 | File | What |
 |------|------|
-| `docs/fused-attention.md` | This design doc |
+| `docs/13-fused-attention.md` | This design doc |
 | `examples/fused_attention_test.py` | Standalone test vs NumPy |

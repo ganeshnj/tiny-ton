@@ -127,7 +127,7 @@ PTX: 4 separate kernel launches via cuLaunchKernel
 
 | File | What |
 |------|------|
-| `docs/rmsnorm.md` | This design doc |
+| `docs/06-rmsnorm.md` | This design doc |
 | `examples/rmsnorm_test.py` | Standalone test: 4-launch rmsnorm vs NumPy |
 
 No C++ files changed. No new builtins in `jit.py`. All kernels are user-written.

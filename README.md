@@ -114,6 +114,7 @@ Reduce launch overhead, fuse kernels, improve throughput.
 - [x] Fused softmax — 5 launches → 1 (warp shuffle: reduce max, sub, exp, reduce sum, div all in registers) — [`examples/fused_softmax_test.py`](examples/fused_softmax_test.py), [`docs/fused-softmax.md`](docs/fused-softmax.md)
 - [x] Fused rmsnorm — 4 launches → 1 (warp shuffle: square, reduce sum, rsqrt, scale in registers) — [`examples/fused_rmsnorm_test.py`](examples/fused_rmsnorm_test.py), [`docs/fused-rmsnorm.md`](docs/fused-rmsnorm.md)
 - [x] Fused per-head attention — 12 launches → 7 (score scaling + softmax fused into one kernel) — [`examples/fused_attention_test.py`](examples/fused_attention_test.py), [`docs/fused-attention.md`](docs/fused-attention.md)
+- [x] NumPy training — replaced scalar `Value` autograd with vectorized NumPy forward + manual backward (full BPTT through KV cache) + Adam; 1000 steps in ~1s vs ~minutes
 
 Expected: ~3x fewer kernel launches, ~3x speedup.
 
@@ -126,8 +127,8 @@ Expected: ~3x fewer kernel launches, ~3x speedup.
 
 #### Layer 3 — Configurable block size (compiler change)
 
-- [ ] Make block size a kernel `constexpr` parameter (like Triton's `tl.constexpr`) — today it is hardcoded to 64, so 75% of threads are idle at n_embd=16
-- [ ] Requires changes in `jit.py` (parse `constexpr` arg) and the IR builder
+- [x] Make block size a kernel `constexpr` parameter — today it is hardcoded to 64, so 75% of threads are idle at n_embd=16 — [`examples/constexpr_test.py`](examples/constexpr_test.py), [`docs/constexpr.md`](docs/constexpr.md)
+- [x] Implemented in `jit.py` (parse `PARAM: tt.constexpr` annotation, separate cache key per value, exclude from IR args); no C++ or MLIR changes required
 
 #### Layer 4 — Tiled matmul with shared memory (C++ MLIR change)
 

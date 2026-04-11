@@ -26,27 +26,46 @@ _DTYPE_MAP = {
 }
 
 
+def _is_constexpr_annotation(ann: ast.expr) -> bool:
+    """Return True if *ann* is ``tt.constexpr`` or bare ``constexpr``."""
+    if isinstance(ann, ast.Attribute):
+        return (isinstance(ann.value, ast.Name)
+                and ann.value.id in _MODULE_ALIASES
+                and ann.attr == "constexpr")
+    if isinstance(ann, ast.Name):
+        return ann.id == "constexpr"
+    return False
+
+
 class KernelVisitor(ast.NodeVisitor):
     """Walks a Python AST and emits TinyTon IR via the C++ IRBuilder."""
 
     def __init__(self, builder, param_names: list[str],
                  arg_is_pointer: Optional[list[bool]] = None,
-                 arg_dtypes: Optional[list[str]] = None):
+                 arg_dtypes: Optional[list[str]] = None,
+                 constexpr_values: Optional[dict[str, int]] = None):
         self.builder = builder
         self.symbols: dict[str, Any] = {}
         self.block_size: Optional[int] = None
         self._arg_dtypes = arg_dtypes or []
+        self._constexpr_values = constexpr_values or {}
         self._kernel_dtype = "i32"
         for d in self._arg_dtypes:
             if d in ("f32", "f16"):
                 self._kernel_dtype = d
                 break
 
+        ir_idx = 0
         for i, name in enumerate(param_names):
+            if name in self._constexpr_values:
+                # Constexpr params are compile-time ints, not IR args.
+                self.symbols[name] = self._constexpr_values[name]
+                continue
             is_ptr = arg_is_pointer[i] if arg_is_pointer else False
             dtype = arg_dtypes[i] if arg_dtypes else "i32"
-            self.symbols[name] = builder.emit_arg(i, is_pointer=is_ptr,
+            self.symbols[name] = builder.emit_arg(ir_idx, is_pointer=is_ptr,
                                                   dtype=dtype)
+            ir_idx += 1
 
     # ------------------------------------------------------------------
     # Statements
@@ -144,7 +163,19 @@ class KernelVisitor(ast.NodeVisitor):
 
         if builtin == "arange":
             start = node.args[0].value
-            end = node.args[1].value
+            end_node = node.args[1]
+            if isinstance(end_node, ast.Constant):
+                end = end_node.value
+            elif isinstance(end_node, ast.Name):
+                # Support constexpr names: tt.arange(0, BLOCK)
+                assert end_node.id in self._constexpr_values, (
+                    f"arange end '{end_node.id}' must be a literal or a "
+                    f"constexpr parameter")
+                end = self._constexpr_values[end_node.id]
+            else:
+                raise NotImplementedError(
+                    f"arange end must be a literal or constexpr name, "
+                    f"got {ast.dump(end_node)}")
             self.block_size = int(end) - int(start)
             return self.builder.emit_thread_id(0)
 
@@ -216,6 +247,18 @@ class JITFunction:
         self.source = textwrap.dedent(inspect.getsource(fn))
         self.tree = ast.parse(self.source)
         self._cache: dict[tuple, Any] = {}
+        self._constexpr_params: set[str] = self._find_constexpr_params()
+
+    def _find_constexpr_params(self) -> set[str]:
+        """Return the set of parameter names annotated with tt.constexpr."""
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.FunctionDef):
+                return {
+                    a.arg for a in node.args.args
+                    if a.annotation is not None
+                    and _is_constexpr_annotation(a.annotation)
+                }
+        return set()
 
     def __getitem__(self, grid: tuple):
         """Enable kernel[grid](...) launch syntax."""
@@ -227,25 +270,45 @@ class JITFunction:
         return launcher
 
     def _make_key(self, args: tuple) -> tuple:
-        return tuple(
-            (type(a).__name__, getattr(a, "shape", None), getattr(a, "dtype", None))
-            for a in args
-        )
+        func_def = self._get_func_def()
+        param_names = [a.arg for a in func_def.args.args]
+        key = []
+        for name, a in zip(param_names, args):
+            if name in self._constexpr_params:
+                # Constexpr value is baked into compiled code — include in key.
+                key.append(("constexpr", int(a)))
+            else:
+                key.append((type(a).__name__,
+                             getattr(a, "shape", None),
+                             getattr(a, "dtype", None)))
+        return tuple(key)
+
+    def _get_func_def(self) -> ast.FunctionDef:
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.FunctionDef):
+                return node
+        raise AssertionError("no function found in source")
 
     def _compile(self, args: tuple):
         import _tiny_ton_core as core
 
-        func_def = None
-        for node in ast.walk(self.tree):
-            if isinstance(node, ast.FunctionDef):
-                func_def = node
-                break
-        assert func_def is not None, "no function found in source"
-
+        func_def = self._get_func_def()
         param_names = [a.arg for a in func_def.args.args]
-        arg_is_pointer = [isinstance(a, np.ndarray) for a in args]
+
+        # Separate constexpr params (compile-time) from runtime args.
+        constexpr_values: dict[str, int] = {}
+        runtime_args: list[Any] = []
+        runtime_names: list[str] = []
+        for name, a in zip(param_names, args):
+            if name in self._constexpr_params:
+                constexpr_values[name] = int(a)
+            else:
+                runtime_args.append(a)
+                runtime_names.append(name)
+
+        arg_is_pointer = [isinstance(a, np.ndarray) for a in runtime_args]
         arg_dtypes = []
-        for a in args:
+        for a in runtime_args:
             if isinstance(a, np.ndarray) and a.dtype in _DTYPE_MAP:
                 arg_dtypes.append(_DTYPE_MAP[a.dtype])
             else:
@@ -263,7 +326,7 @@ class JITFunction:
         builder.begin_function(func_def.name)
 
         visitor = KernelVisitor(builder, param_names, arg_is_pointer,
-                                arg_dtypes)
+                                arg_dtypes, constexpr_values)
         visitor.visit(func_def)
 
         block_size = visitor.block_size or 1
@@ -279,6 +342,8 @@ class JITFunction:
                 "kernel_name": nvptx_result.kernel_name,
                 "block_size": block_size,
                 "kernel_dtype": kernel_dtype,
+                "constexpr_params": self._constexpr_params,
+                "param_names": param_names,
             }
 
         result = builder.compile()
@@ -288,6 +353,8 @@ class JITFunction:
             "binary": result.get_binary(),
             "block_size": block_size,
             "kernel_dtype": kernel_dtype,
+            "constexpr_params": self._constexpr_params,
+            "param_names": param_names,
         }
 
     def _launch(self, compiled, grid: tuple, args: tuple):
@@ -295,6 +362,13 @@ class JITFunction:
             self._launch_cuda(compiled, grid, args)
         else:
             self._launch_simulator(compiled, grid, args)
+
+    def _runtime_args(self, compiled, args: tuple):
+        """Return only the non-constexpr args (those passed to the kernel)."""
+        constexpr_params = compiled["constexpr_params"]
+        param_names = compiled["param_names"]
+        return [a for name, a in zip(param_names, args)
+                if name not in constexpr_params]
 
     def _launch_cuda(self, compiled, grid: tuple, args: tuple):
         import _tiny_ton_core as core
@@ -307,7 +381,7 @@ class JITFunction:
         array_mappings = []
 
         kernel_args = []
-        for a in args:
+        for a in self._runtime_args(compiled, args):
             if isinstance(a, np.ndarray):
                 flat = np.ascontiguousarray(a.flatten())
                 nbytes = flat.nbytes
@@ -339,8 +413,10 @@ class JITFunction:
         num_blocks = grid[0] if grid else 1
         kernel_dtype = compiled.get("kernel_dtype", "i32")
 
+        runtime_args = self._runtime_args(compiled, args)
+
         total_elements = 0
-        for a in args:
+        for a in runtime_args:
             if isinstance(a, np.ndarray):
                 total_elements += a.size
 
@@ -351,7 +427,7 @@ class JITFunction:
         next_addr = 0
         array_mappings = []
 
-        for a in args:
+        for a in runtime_args:
             if isinstance(a, np.ndarray):
                 flat = a.flatten()
                 if flat.dtype == np.float32:

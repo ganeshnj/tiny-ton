@@ -1,4 +1,4 @@
-"""tiny-ton: A Triton-inspired GPU kernel compiler."""
+"""tiny-ton: A GPU kernel compiler."""
 
 from tiny_ton.jit import jit
 
@@ -40,8 +40,30 @@ def reduce_max(x):
     raise NotImplementedError("reduce_max is only valid inside a @tt.jit kernel")
 
 
+class constexpr:
+    """Marks a kernel parameter as a compile-time constant.
+
+    When a parameter is annotated with ``tt.constexpr``, its value is baked
+    into the compiled kernel at JIT time rather than being passed as a runtime
+    argument.  Different values produce different compiled kernels (separate
+    cache entries).
+
+    The primary use is to set the block size via ``tt.arange``::
+
+        @tt.jit
+        def kernel(src, dst, N, BLOCK: tt.constexpr):
+            tid  = tt.arange(0, BLOCK)
+            mask = tid < N
+            ...
+
+        kernel[(1,)](src, dst, N, 16)   # 16 threads per block
+        kernel[(1,)](src, dst, N, 64)   # 64 threads per block (cached separately)
+    """
+
+
 __all__ = [
     "jit",
+    "constexpr",
     "program_id",
     "arange",
     "load",

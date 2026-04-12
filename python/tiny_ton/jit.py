@@ -13,7 +13,8 @@ import numpy as np
 
 _BUILTINS = {"program_id", "arange", "load", "store",
              "exp", "log", "sqrt", "rsqrt", "abs", "max", "relu",
-             "reduce_sum", "reduce_max"}
+             "reduce_sum", "reduce_max",
+             "sync", "shared_store", "shared_load"}
 
 # Module aliases that should be treated as the tiny_ton namespace.
 _MODULE_ALIASES = {"tt", "tiny_ton"}
@@ -219,6 +220,23 @@ class KernelVisitor(ast.NodeVisitor):
             return self.builder.emit_reduce_sum(self._eval(node.args[0]))
         if builtin == "reduce_max":
             return self.builder.emit_reduce_max(self._eval(node.args[0]))
+
+        if builtin == "sync":
+            self.builder.emit_sync()
+            return None
+        if builtin == "shared_store":
+            idx = self._eval(node.args[0])
+            val = self._eval(node.args[1])
+            assert self.block_size is not None, \
+                "tt.arange must be called before tt.shared_store"
+            self.builder.emit_shared_store(idx, val, self.block_size)
+            return None
+        if builtin == "shared_load":
+            idx = self._eval(node.args[0])
+            assert self.block_size is not None, \
+                "tt.arange must be called before tt.shared_load"
+            return self.builder.emit_shared_load(
+                idx, self.block_size, self._kernel_dtype)
 
         raise NotImplementedError(f"unsupported builtin: {builtin}")
 

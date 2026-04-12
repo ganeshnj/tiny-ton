@@ -43,6 +43,11 @@ public:
   mlir::Value emitReduceSum(mlir::Value operand);
   mlir::Value emitReduceMax(mlir::Value operand);
 
+  void emitSync();
+  void emitSharedStore(mlir::Value idx, mlir::Value val, int64_t bufferSize);
+  mlir::Value emitSharedLoad(mlir::Value idx, int64_t bufferSize,
+                             ElementType elemType = ElementType::F32);
+
   mlir::Value emitLoad(mlir::Value addr, mlir::Value mask = {},
                        mlir::Value other = {},
                        ElementType elemType = ElementType::I32);

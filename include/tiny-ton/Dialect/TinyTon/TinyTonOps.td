@@ -194,6 +194,31 @@ def TinyTon_StoreOp : TinyTon_Op<"store", []> {
   let assemblyFormat = "$addr `,` $value (`,` $mask^)? attr-dict `:` type($value)";
 }
 
+// --- Shared memory ---------------------------------------------------------
+
+def TinyTon_SyncOp : TinyTon_Op<"sync", []> {
+  let summary = "Block-wide barrier — all threads must reach this point before any proceed.";
+  let arguments = (ins);
+  let results = (outs);
+  let assemblyFormat = "attr-dict";
+}
+
+def TinyTon_SharedStoreOp : TinyTon_Op<"shared_store", []> {
+  let summary = "Write a value into block-local shared memory at the given index.";
+  let arguments = (ins I32:$idx,
+                       TinyTon_ScalarType:$value,
+                       I64Attr:$bufferSize);
+  let results = (outs);
+  let assemblyFormat = "$idx `,` $value `size` $bufferSize attr-dict `:` type($value)";
+}
+
+def TinyTon_SharedLoadOp : TinyTon_Op<"shared_load", []> {
+  let summary = "Read a value from block-local shared memory at the given index.";
+  let arguments = (ins I32:$idx, I64Attr:$bufferSize);
+  let results = (outs TinyTon_ScalarType:$result);
+  let assemblyFormat = "$idx `size` $bufferSize attr-dict `:` type($result)";
+}
+
 // --- Control flow ----------------------------------------------------------
 
 def TinyTon_BranchZeroOp : TinyTon_Op<"bz", []> {

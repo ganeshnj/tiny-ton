@@ -177,6 +177,28 @@ mlir::Value IRBuilder::emitReduceMax(mlir::Value operand) {
       .getResult();
 }
 
+void IRBuilder::emitSync() {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  impl_->builder->create<tinyton::SyncOp>(loc);
+}
+
+void IRBuilder::emitSharedStore(mlir::Value idx, mlir::Value val,
+                                int64_t bufferSize) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto sizeAttr = impl_->builder->getI64IntegerAttr(bufferSize);
+  impl_->builder->create<tinyton::SharedStoreOp>(loc, idx, val, sizeAttr);
+}
+
+mlir::Value IRBuilder::emitSharedLoad(mlir::Value idx, int64_t bufferSize,
+                                      ElementType elemType) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto sizeAttr = impl_->builder->getI64IntegerAttr(bufferSize);
+  mlir::Type resTy = elementTypeToMLIR(elemType, &impl_->context);
+  return impl_->builder
+      ->create<tinyton::SharedLoadOp>(loc, resTy, idx, sizeAttr)
+      .getResult();
+}
+
 mlir::Value IRBuilder::emitLoad(mlir::Value addr, mlir::Value mask,
                                 mlir::Value other, ElementType elemType) {
   auto loc = mlir::UnknownLoc::get(&impl_->context);

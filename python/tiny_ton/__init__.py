@@ -40,6 +40,21 @@ def reduce_max(x):
     raise NotImplementedError("reduce_max is only valid inside a @tt.jit kernel")
 
 
+def sync():
+    """Block-wide barrier — all threads must reach this point before any proceed."""
+    raise NotImplementedError("sync is only valid inside a @tt.jit kernel")
+
+
+def shared_store(idx, val):
+    """Write a value into block-local shared memory at the given index."""
+    raise NotImplementedError("shared_store is only valid inside a @tt.jit kernel")
+
+
+def shared_load(idx):
+    """Read a value from block-local shared memory at the given index."""
+    raise NotImplementedError("shared_load is only valid inside a @tt.jit kernel")
+
+
 class constexpr:
     """Marks a kernel parameter as a compile-time constant.
 
@@ -71,4 +86,7 @@ __all__ = [
     "relu",
     "reduce_sum",
     "reduce_max",
+    "sync",
+    "shared_store",
+    "shared_load",
 ]

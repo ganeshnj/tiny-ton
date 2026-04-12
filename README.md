@@ -132,8 +132,9 @@ Expected: ~3x fewer kernel launches, ~3x speedup.
 
 #### Layer 4 — Tiled matmul with shared memory (C++ MLIR change)
 
-- [ ] Tiled matmul with shared memory + barriers — reuse each weight row across multiple threads via shared memory; impactful at n_embd >= 64
-- [ ] Requires adding `gpu.barrier` and shared memory ops to the MLIR pipeline
+- [x] Shared memory primitives — `tt.sync()`, `tt.shared_store(idx, val)`, `tt.shared_load(idx)` — [`examples/tiled_matvec_test.py`](examples/tiled_matvec_test.py), [`docs/15-shared-memory.md`](docs/15-shared-memory.md)
+- [x] Tiled 2-row-per-block matvec demo using shared memory for x vector reuse
+- [ ] Full tiled GEMM (requires `tt.for_range` loop support → `scf.for` in MLIR)
 
 #### Layer 5 — Flash Attention (algorithmic, longer sequences)
 

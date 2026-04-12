@@ -141,6 +141,20 @@ PYBIND11_MODULE(_tiny_ton_core, m) {
            [](tinyton::IRBuilder &self, PyValue cond, int64_t skip) {
              self.emitBranchZero(cond.val, skip);
            })
+      .def("emit_sync", [](tinyton::IRBuilder &self) { self.emitSync(); })
+      .def("emit_shared_store",
+           [](tinyton::IRBuilder &self, PyValue idx, PyValue val,
+              int64_t bufferSize) {
+             self.emitSharedStore(idx.val, val.val, bufferSize);
+           },
+           py::arg("idx"), py::arg("val"), py::arg("buffer_size"))
+      .def("emit_shared_load",
+           [](tinyton::IRBuilder &self, PyValue idx, int64_t bufferSize,
+              const std::string &dtype) {
+             auto et = tinyton::elementTypeFromString(dtype);
+             return PyValue{self.emitSharedLoad(idx.val, bufferSize, et)};
+           },
+           py::arg("idx"), py::arg("buffer_size"), py::arg("dtype") = "f32")
       .def("emit_ret", [](tinyton::IRBuilder &self) { self.emitRet(); })
       .def("dump_mlir",
            [](tinyton::IRBuilder &self) {

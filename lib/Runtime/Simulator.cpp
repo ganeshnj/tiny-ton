@@ -142,12 +142,13 @@ void SimulatedGPU::run(int numBlocks, int threadsPerBlock) {
     bool done = false;
   };
 
-  enum class StepResult { Continue, Reduce, Done };
+  enum class StepResult { Continue, Reduce, Sync, Done };
 
   // Executes one instruction, returns whether to continue, pause for reduce,
   // or stop. For REDUCE, reduceOperand receives the thread's contribution,
   // reduceRd/reduceFlags are set for the outer loop.
   auto execOne = [&](ThreadState &ts, int blockId, int threadId,
+                     std::vector<int32_t> &sharedMem,
                      int32_t &reduceOperand, uint8_t &reduceRd,
                      uint8_t &reduceFlags) -> StepResult {
     assert(ts.pc >= 0 && ts.pc < (int)prog.size() && "PC out of bounds");
@@ -190,16 +191,27 @@ void SimulatedGPU::run(int numBlocks, int threadsPerBlock) {
     case 0x6: // CMP_LT
       ts.regs[rd] = (ts.regs[rs] < ts.regs[rt]) ? 1 : 0;
       break;
-    case 0x7: { // LDR
+    case 0x7: { // LDR (rt=0: global, rt=1: shared)
       int32_t addr = ts.regs[rs];
-      assert(addr >= 0 && addr < (int)mem.size() && "LDR out of bounds");
-      ts.regs[rd] = mem[addr];
+      if (rt == 1) {
+        assert(addr >= 0 && addr < (int)sharedMem.size() &&
+               "SHMEM_LDR out of bounds");
+        ts.regs[rd] = sharedMem[addr];
+      } else {
+        assert(addr >= 0 && addr < (int)mem.size() && "LDR out of bounds");
+        ts.regs[rd] = mem[addr];
+      }
       break;
     }
-    case 0x8: { // STR
+    case 0x8: { // STR (rd=0: global, rd=1: shared)
       int32_t addr = ts.regs[rs];
-      assert(addr >= 0 && addr < (int)mem.size() && "STR out of bounds");
-      mem[addr] = ts.regs[rt];
+      if (rd == 1) {
+        if (addr >= 0 && addr < (int)sharedMem.size())
+          sharedMem[addr] = ts.regs[rt];
+      } else {
+        assert(addr >= 0 && addr < (int)mem.size() && "STR out of bounds");
+        mem[addr] = ts.regs[rt];
+      }
       break;
     }
     case 0x9:
@@ -424,6 +436,10 @@ void SimulatedGPU::run(int numBlocks, int threadsPerBlock) {
       break;
     }
     case 0xF:
+      if ((inst & 0xFF) == 0x01) {
+        // SYNC barrier
+        return StepResult::Sync;
+      }
       ts.done = true;
       return StepResult::Done;
     default:
@@ -436,14 +452,16 @@ void SimulatedGPU::run(int numBlocks, int threadsPerBlock) {
 
   for (int blockId = 0; blockId < numBlocks; ++blockId) {
     std::vector<ThreadState> threads(threadsPerBlock);
+    std::vector<int32_t> sharedMem(256, 0);
 
     constexpr int kMaxPhases = 10000;
     for (int phase = 0; phase < kMaxPhases; ++phase) {
-      // Run all threads until they hit a REDUCE barrier or RET.
+      // Run all threads until they hit a REDUCE/SYNC barrier or RET.
       std::vector<int32_t> reduceValues(threadsPerBlock, 0);
       uint8_t reduceRd = 0;
       uint8_t reduceFlags = 0;
       bool anyReduced = false;
+      bool anySync = false;
 
       for (int tid = 0; tid < threadsPerBlock; ++tid) {
         auto &ts = threads[tid];
@@ -454,7 +472,8 @@ void SimulatedGPU::run(int numBlocks, int threadsPerBlock) {
         for (int cycle = 0; cycle < kMaxCycles; ++cycle) {
           int32_t operand = 0;
           uint8_t rRd = 0, rFlags = 0;
-          auto result = execOne(ts, blockId, tid, operand, rRd, rFlags);
+          auto result =
+              execOne(ts, blockId, tid, sharedMem, operand, rRd, rFlags);
           if (result == StepResult::Reduce) {
             reduceValues[tid] = operand;
             reduceRd = rRd;
@@ -462,9 +481,23 @@ void SimulatedGPU::run(int numBlocks, int threadsPerBlock) {
             anyReduced = true;
             break;
           }
+          if (result == StepResult::Sync) {
+            anySync = true;
+            break;
+          }
           if (result == StepResult::Done)
             break;
         }
+      }
+
+      if (anySync) {
+        // SYNC barrier: advance all non-done threads past the 1-word SYNC.
+        for (int tid = 0; tid < threadsPerBlock; ++tid) {
+          auto &ts = threads[tid];
+          if (!ts.done)
+            ts.pc += 1;
+        }
+        continue;
       }
 
       if (!anyReduced) {

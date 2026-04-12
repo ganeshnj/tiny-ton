@@ -454,6 +454,28 @@ std::vector<Instruction> emit(mlir::ModuleOp module,
           llvm::formatv("BZ R{0}, #{1}", (int)rs, (int)imm);
       instructions.push_back({enc, asm_str});
 
+    } else if (llvm::isa<tinyton::SyncOp>(&op)) {
+      // Encoding: opcode 0xF with imm=1 distinguishes from RET (imm=0).
+      instructions.push_back({0xF001, "SYNC"});
+
+    } else if (auto ssOp = llvm::dyn_cast<tinyton::SharedStoreOp>(&op)) {
+      // rd=1 flags shared memory (vs rd=0 for global STR).
+      uint8_t ri = getReg(ssOp.getIdx());
+      uint8_t rv = getReg(ssOp.getValue());
+      uint16_t enc = encodeRRR(0x8, 1, ri, rv);
+      instructions.push_back(
+          {enc,
+           llvm::formatv("SHMEM_STR [R{0}], R{1}", (int)ri, (int)rv).str()});
+
+    } else if (auto slOp = llvm::dyn_cast<tinyton::SharedLoadOp>(&op)) {
+      // rt=1 flags shared memory (vs rt=0 for global LDR).
+      uint8_t rd = getReg(slOp.getResult());
+      uint8_t ri = getReg(slOp.getIdx());
+      uint16_t enc = encodeRRR(0x7, rd, ri, 1);
+      instructions.push_back(
+          {enc,
+           llvm::formatv("SHMEM_LDR R{0}, [R{1}]", (int)rd, (int)ri).str()});
+
     } else if (llvm::isa<tinyton::RetOp>(&op)) {
       instructions.push_back({0xF000, "RET"});
 

@@ -144,21 +144,36 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
                    builder.getUnitAttr());
 
   bool hasReduceOps = false;
+  int64_t userShmemSize = 0;
   for (auto *op : srcOps) {
     if (llvm::isa<tinyton::ReduceSumOp, tinyton::ReduceMaxOp>(op)) {
       hasReduceOps = true;
-      break;
     }
+    if (auto ssOp = llvm::dyn_cast<tinyton::SharedStoreOp>(op))
+      userShmemSize = std::max(userShmemSize,
+                               static_cast<int64_t>(ssOp.getBufferSize()));
+    if (auto slOp = llvm::dyn_cast<tinyton::SharedLoadOp>(op))
+      userShmemSize = std::max(userShmemSize,
+                               static_cast<int64_t>(slOp.getBufferSize()));
   }
+
+  auto addrSpace = mlir::gpu::AddressSpaceAttr::get(
+      ctx, mlir::gpu::AddressSpace::Workgroup);
 
   mlir::BlockArgument shmemArg;
   if (hasReduceOps) {
     auto f32Ty = mlir::Float32Type::get(ctx);
-    auto addrSpace = mlir::gpu::AddressSpaceAttr::get(
-        ctx, mlir::gpu::AddressSpace::Workgroup);
     auto shmemTy = mlir::MemRefType::get(
         {32}, f32Ty, mlir::MemRefLayoutAttrInterface{}, addrSpace);
     shmemArg = gpuFunc.addWorkgroupAttribution(shmemTy, loc);
+  }
+
+  mlir::BlockArgument userShmemArg;
+  if (userShmemSize > 0) {
+    auto f32Ty = mlir::Float32Type::get(ctx);
+    auto userShmemTy = mlir::MemRefType::get(
+        {userShmemSize}, f32Ty, mlir::MemRefLayoutAttrInterface{}, addrSpace);
+    userShmemArg = gpuFunc.addWorkgroupAttribution(userShmemTy, loc);
   }
 
   auto *entryBlock = &gpuFunc.getBody().front();
@@ -612,6 +627,37 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
       } else {
         builder.create<mlir::LLVM::StoreOp>(loc, val, addr);
       }
+
+    } else if (llvm::isa<tinyton::SyncOp>(op)) {
+      builder.create<mlir::gpu::BarrierOp>(loc);
+
+    } else if (auto ssOp = llvm::dyn_cast<tinyton::SharedStoreOp>(op)) {
+      auto idx = valueMap.lookup(ssOp.getIdx());
+      auto val = valueMap.lookup(ssOp.getValue());
+      auto f32Ty = mlir::Float32Type::get(ctx);
+      mlir::Value storeVal = val;
+      if (val.getType().isF16())
+        storeVal = builder.create<mlir::arith::ExtFOp>(loc, f32Ty, val);
+      else if (!isFloatType(val.getType()))
+        storeVal = builder.create<mlir::arith::BitcastOp>(loc, f32Ty, val);
+      auto idxIndex = builder.create<mlir::arith::IndexCastOp>(
+          loc, builder.getIndexType(), idx);
+      builder.create<mlir::memref::StoreOp>(loc, storeVal, userShmemArg,
+                                            mlir::ValueRange{idxIndex});
+
+    } else if (auto slOp = llvm::dyn_cast<tinyton::SharedLoadOp>(op)) {
+      auto idx = valueMap.lookup(slOp.getIdx());
+      auto idxIndex = builder.create<mlir::arith::IndexCastOp>(
+          loc, builder.getIndexType(), idx);
+      auto loadedF32 = builder.create<mlir::memref::LoadOp>(
+          loc, userShmemArg, mlir::ValueRange{idxIndex});
+      auto resTy = slOp.getResult().getType();
+      mlir::Value res = loadedF32;
+      if (resTy.isF16())
+        res = builder.create<mlir::arith::TruncFOp>(loc, resTy, loadedF32);
+      else if (!isFloatType(resTy))
+        res = builder.create<mlir::arith::BitcastOp>(loc, resTy, loadedF32);
+      valueMap.map(slOp.getResult(), res);
 
     } else if (llvm::isa<tinyton::RetOp>(op)) {
       builder.create<mlir::gpu::ReturnOp>(loc);

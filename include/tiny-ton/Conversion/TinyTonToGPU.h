@@ -12,6 +12,6 @@ struct GPULoweringResult {
   std::string kernelName;
 };
 
-GPULoweringResult lowerToGPU(mlir::ModuleOp module);
+GPULoweringResult lowerToGPU(mlir::ModuleOp module, int blockSize = 32);
 
 } // namespace tinyton

@@ -8,6 +8,18 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(MLIR REQUIRED CONFIG)
 find_package(LLVM REQUIRED CONFIG)
 
+# LLVM 18 from apt.llvm.org exports zstd::libzstd_shared but libzstd-dev may
+# not be installed.  Manually define the cmake target if the .so is present.
+if(NOT TARGET zstd::libzstd_shared)
+  find_library(ZSTD_LIB NAMES zstd)
+  if(ZSTD_LIB)
+    add_library(zstd::libzstd_shared SHARED IMPORTED)
+    set_target_properties(zstd::libzstd_shared PROPERTIES
+      IMPORTED_LOCATION "${ZSTD_LIB}")
+    message(STATUS "Defined zstd::libzstd_shared -> ${ZSTD_LIB}")
+  endif()
+endif()
+
 message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 

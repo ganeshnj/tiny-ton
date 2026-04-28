@@ -93,13 +93,99 @@ class KernelVisitor(ast.NodeVisitor):
     def visit_Expr(self, node: ast.Expr):
         self._eval(node.value)
 
+    def visit_For(self, node: ast.For):
+        """Unroll ``for x in range(...)`` at compile time.
+
+        All range bounds must be Python literals or ``tt.constexpr``
+        parameters (i.e. values known when the kernel is compiled).  The
+        loop variable is stored as a Python int in ``symbols`` each
+        iteration; ``_eval`` promotes it to an IR constant whenever it
+        appears in an expression.
+        """
+        assert isinstance(node.target, ast.Name), (
+            "for loop target must be a simple name")
+        loop_var = node.target.id
+
+        iter_node = node.iter
+        assert (
+            isinstance(iter_node, ast.Call)
+            and isinstance(iter_node.func, ast.Name)
+            and iter_node.func.id == "range"
+        ), "tiny-ton for loops must use range(...) with constexpr bounds"
+
+        raw = [self._eval_python_int(a) for a in iter_node.args]
+        if len(raw) == 1:
+            start, stop, step = 0, raw[0], 1
+        elif len(raw) == 2:
+            start, stop, step = raw[0], raw[1], 1
+        else:
+            start, stop, step = raw[0], raw[1], raw[2]
+
+        for val in range(start, stop, step):
+            self.symbols[loop_var] = val  # Python int → IR const in _eval
+            for stmt in node.body:
+                self.visit(stmt)
+
+        self.symbols.pop(loop_var, None)
+
+    def _eval_python_int(self, node: ast.expr) -> int:
+        """Evaluate *node* as a Python integer at compile time.
+
+        Accepts integer literals, constexpr parameter names, loop variable
+        names (already stored as Python ints in ``symbols``), and simple
+        arithmetic combinations thereof.  Used to evaluate ``range()``
+        bounds in ``visit_For``.
+        """
+        if isinstance(node, ast.Constant):
+            return int(node.value)
+        if isinstance(node, ast.Name):
+            if node.id in self._constexpr_values:
+                return self._constexpr_values[node.id]
+            if node.id in self.symbols and isinstance(self.symbols[node.id], int):
+                return self.symbols[node.id]
+            raise AssertionError(
+                f"loop bound '{node.id}' must be a literal or a "
+                f"tt.constexpr parameter")
+        if isinstance(node, ast.BinOp):
+            lhs = self._eval_python_int(node.left)
+            rhs = self._eval_python_int(node.right)
+            if isinstance(node.op, ast.Add):
+                return lhs + rhs
+            if isinstance(node.op, ast.Sub):
+                return lhs - rhs
+            if isinstance(node.op, ast.Mult):
+                return lhs * rhs
+            if isinstance(node.op, ast.FloorDiv):
+                return lhs // rhs
+        raise NotImplementedError(
+            f"loop bound must be a constexpr literal, got {ast.dump(node)}")
+
     # ------------------------------------------------------------------
     # Expression evaluator (returns a PyValue or None for void ops)
     # ------------------------------------------------------------------
 
+    def _promote_scalar(self, val):
+        """Promote a raw Python int/float to an IR constant Value.
+
+        Called on BinOp operands as a safety net: constexpr params and loop
+        variables are stored as Python ints in ``symbols`` and should already
+        be promoted by ``_eval``, but if ``emit_const`` returns the raw value
+        on some builds/platforms, this catches the fallthrough.
+        """
+        if isinstance(val, int):
+            return self.builder.emit_const(val)
+        if isinstance(val, float):
+            if self._kernel_dtype == "f16":
+                return self.builder.emit_hconst(val)
+            return self.builder.emit_fconst(val)
+        return val
+
     def _eval(self, node: ast.expr):
         if isinstance(node, ast.Constant):
             val = node.value
+            if isinstance(val, str):
+                # Docstrings are Expr(Constant(str)) — ignore them.
+                return None
             if isinstance(val, float):
                 if self._kernel_dtype == "f16":
                     return self.builder.emit_hconst(val)
@@ -108,11 +194,25 @@ class KernelVisitor(ast.NodeVisitor):
 
         if isinstance(node, ast.Name):
             assert node.id in self.symbols, f"undefined: {node.id}"
-            return self.symbols[node.id]
+            val = self.symbols[node.id]
+            # Auto-promote Python scalars (from constexpr params or loop
+            # variables) to IR constants so they work in pointer arithmetic.
+            if isinstance(val, int):
+                return self.builder.emit_const(val)
+            if isinstance(val, float):
+                if self._kernel_dtype == "f16":
+                    return self.builder.emit_hconst(val)
+                return self.builder.emit_fconst(val)
+            return val
 
         if isinstance(node, ast.BinOp):
             lhs = self._eval(node.left)
             rhs = self._eval(node.right)
+            # Defensively promote Python scalars to IR constants in case a
+            # constexpr param or loop variable slipped through as a raw int/float
+            # (e.g. when emit_const returns the raw value on some builds).
+            lhs = self._promote_scalar(lhs)
+            rhs = self._promote_scalar(rhs)
             if isinstance(node.op, ast.Add):
                 return self.builder.emit_add(lhs, rhs)
             if isinstance(node.op, ast.Sub):
@@ -351,7 +451,7 @@ class JITFunction:
 
         if use_cuda:
             sm = os.environ.get("TTN_SM_VERSION", "sm_87")
-            nvptx_result = builder.compile_to_nvptx(sm_version=sm)
+            nvptx_result = builder.compile_to_nvptx(sm_version=sm, block_size=block_size)
             assert nvptx_result.success, \
                 f"NVPTX compilation failed: {nvptx_result.error}"
             return {

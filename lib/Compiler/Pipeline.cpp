@@ -201,7 +201,7 @@ static void initNVPTXOnce() {
 }
 
 NVPTXCompileResult compileToNVPTX(mlir::ModuleOp srcModule,
-                                  llvm::StringRef smVersion) {
+                                  llvm::StringRef smVersion, int blockSize) {
   NVPTXCompileResult result;
   initNVPTXOnce();
 
@@ -209,7 +209,7 @@ NVPTXCompileResult compileToNVPTX(mlir::ModuleOp srcModule,
 
   auto clonedModule = srcModule.clone();
 
-  auto gpuResult = lowerToGPU(clonedModule);
+  auto gpuResult = lowerToGPU(clonedModule, blockSize);
   if (!gpuResult.success) {
     result.error = "GPU lowering failed: " + gpuResult.error;
     clonedModule.erase();

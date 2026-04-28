@@ -87,7 +87,7 @@ mlir::Value makeFloatZero(mlir::OpBuilder &builder, mlir::Location loc,
 
 } // namespace
 
-GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
+GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule, int blockSize) {
   GPULoweringResult result;
   auto *ctx = srcModule.getContext();
   auto loc = mlir::UnknownLoc::get(ctx);
@@ -411,57 +411,83 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
                   : (mlir::Value)builder.create<mlir::arith::ConstantIntOp>(
                         loc, 0, i32Ty);
 
+      // Compute the shuffle width: smallest power-of-2 >= min(blockSize, 32).
+      // Using the correct width avoids undefined behavior on partial warps.
       constexpr int kWarpSize = 32;
-      for (int offset : {1, 2, 4, 8, 16}) {
+      int effectiveWidth = std::min(blockSize, kWarpSize);
+      int shuffleWidth = 1;
+      while (shuffleWidth < effectiveWidth) shuffleWidth <<= 1;
+
+      // Phase 1: intra-warp XOR reduction with correct width.
+      for (int offset = shuffleWidth >> 1; offset >= 1; offset >>= 1) {
         auto shuf = builder.create<mlir::gpu::ShuffleOp>(
-            loc, val, offset, kWarpSize, mlir::gpu::ShuffleMode::XOR);
+            loc, val, offset, shuffleWidth, mlir::gpu::ShuffleMode::XOR);
         val = combineSum(val, shuf.getShuffleResult());
       }
 
-      auto tidIdx = builder.create<mlir::gpu::ThreadIdOp>(
-          loc, mlir::gpu::Dimension::x);
-      auto tid =
-          builder.create<mlir::arith::IndexCastOp>(loc, i32Ty, tidIdx);
-      auto c32 = builder.create<mlir::arith::ConstantIntOp>(loc, 32, i32Ty);
-      auto warpId = builder.create<mlir::arith::DivUIOp>(loc, tid, c32);
-      auto laneId = builder.create<mlir::arith::RemUIOp>(loc, tid, c32);
+      // Phase 2: inter-warp reduction via shared memory (only when blockSize > 32).
+      if (blockSize > kWarpSize) {
+        auto tidIdx = builder.create<mlir::gpu::ThreadIdOp>(
+            loc, mlir::gpu::Dimension::x);
+        auto tid =
+            builder.create<mlir::arith::IndexCastOp>(loc, i32Ty, tidIdx);
+        auto c32 = builder.create<mlir::arith::ConstantIntOp>(loc, 32, i32Ty);
+        auto warpId = builder.create<mlir::arith::DivUIOp>(loc, tid, c32);
+        auto laneId = builder.create<mlir::arith::RemUIOp>(loc, tid, c32);
 
-      mlir::Value storeVal =
-          isFloat ? val
-                  : (mlir::Value)builder.create<mlir::arith::BitcastOp>(
-                        loc, f32Ty, val);
-      auto warpIdIdx = builder.create<mlir::arith::IndexCastOp>(
-          loc, builder.getIndexType(), warpId);
-      builder.create<mlir::memref::StoreOp>(loc, storeVal, shmemArg,
-                                            mlir::ValueRange{warpIdIdx});
+        // Lane 0 of each warp stores its partial sum to shared memory.
+        auto laneIsZero = builder.create<mlir::arith::CmpIOp>(
+            loc, mlir::arith::CmpIPredicate::eq, laneId,
+            builder.create<mlir::arith::ConstantIntOp>(loc, 0, i32Ty));
+        mlir::Value storeVal =
+            isFloat ? val
+                    : (mlir::Value)builder.create<mlir::arith::BitcastOp>(
+                          loc, f32Ty, val);
+        auto warpIdIdx = builder.create<mlir::arith::IndexCastOp>(
+            loc, builder.getIndexType(), warpId);
 
-      builder.create<mlir::gpu::BarrierOp>(loc);
+        auto &region = gpuFunc.getBody();
+        auto *storeThenBlock = new mlir::Block();
+        auto *storeMergeBlock = new mlir::Block();
+        region.push_back(storeThenBlock);
+        region.push_back(storeMergeBlock);
+        builder.create<mlir::cf::CondBranchOp>(loc, laneIsZero, storeThenBlock,
+                                               storeMergeBlock);
+        builder.setInsertionPointToStart(storeThenBlock);
+        builder.create<mlir::memref::StoreOp>(loc, storeVal, shmemArg,
+                                              mlir::ValueRange{warpIdIdx});
+        builder.create<mlir::cf::BranchOp>(loc, storeMergeBlock);
+        builder.setInsertionPointToStart(storeMergeBlock);
 
-      auto blockDimIdx = builder.create<mlir::gpu::BlockDimOp>(
-          loc, mlir::gpu::Dimension::x);
-      auto blockDim =
-          builder.create<mlir::arith::IndexCastOp>(loc, i32Ty, blockDimIdx);
-      auto numWarps = builder.create<mlir::arith::DivUIOp>(loc, blockDim, c32);
-      auto inBounds = builder.create<mlir::arith::CmpIOp>(
-          loc, mlir::arith::CmpIPredicate::ult, laneId, numWarps);
-      auto c0 = builder.create<mlir::arith::ConstantIntOp>(loc, 0, i32Ty);
-      auto safeLane = builder.create<mlir::arith::SelectOp>(loc, inBounds,
-                                                            laneId, c0);
-      auto safeLaneIdx = builder.create<mlir::arith::IndexCastOp>(
-          loc, builder.getIndexType(), safeLane);
-      auto loadedF32 = builder.create<mlir::memref::LoadOp>(
-          loc, shmemArg, mlir::ValueRange{safeLaneIdx});
-      mlir::Value loaded =
-          isFloat ? (mlir::Value)loadedF32
-                  : (mlir::Value)builder.create<mlir::arith::BitcastOp>(
-                        loc, i32Ty, loadedF32);
-      val = builder.create<mlir::arith::SelectOp>(loc, inBounds, loaded,
-                                                  identity);
+        builder.create<mlir::gpu::BarrierOp>(loc);
 
-      for (int offset : {1, 2, 4, 8, 16}) {
-        auto shuf = builder.create<mlir::gpu::ShuffleOp>(
-            loc, val, offset, kWarpSize, mlir::gpu::ShuffleMode::XOR);
-        val = combineSum(val, shuf.getShuffleResult());
+        int numWarpsStatic = (blockSize + kWarpSize - 1) / kWarpSize;
+        auto inBounds = builder.create<mlir::arith::CmpIOp>(
+            loc, mlir::arith::CmpIPredicate::ult, laneId,
+            builder.create<mlir::arith::ConstantIntOp>(loc, numWarpsStatic,
+                                                       i32Ty));
+        auto c0 = builder.create<mlir::arith::ConstantIntOp>(loc, 0, i32Ty);
+        auto safeLane = builder.create<mlir::arith::SelectOp>(loc, inBounds,
+                                                              laneId, c0);
+        auto safeLaneIdx = builder.create<mlir::arith::IndexCastOp>(
+            loc, builder.getIndexType(), safeLane);
+        auto loadedF32 = builder.create<mlir::memref::LoadOp>(
+            loc, shmemArg, mlir::ValueRange{safeLaneIdx});
+        mlir::Value loaded =
+            isFloat ? (mlir::Value)loadedF32
+                    : (mlir::Value)builder.create<mlir::arith::BitcastOp>(
+                          loc, i32Ty, loadedF32);
+        val = builder.create<mlir::arith::SelectOp>(loc, inBounds, loaded,
+                                                    identity);
+
+        // Final XOR reduction across warp-leaders (numWarpsStatic <= 32).
+        int warpShuffleWidth = 1;
+        while (warpShuffleWidth < numWarpsStatic) warpShuffleWidth <<= 1;
+        for (int offset = warpShuffleWidth >> 1; offset >= 1; offset >>= 1) {
+          auto shuf = builder.create<mlir::gpu::ShuffleOp>(
+              loc, val, offset, warpShuffleWidth, mlir::gpu::ShuffleMode::XOR);
+          val = combineSum(val, shuf.getShuffleResult());
+        }
       }
 
       if (ty.isF16())
@@ -496,56 +522,76 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule) {
       }
 
       constexpr int kWarpSize = 32;
-      for (int offset : {1, 2, 4, 8, 16}) {
+      int effectiveWidth = std::min(blockSize, kWarpSize);
+      int shuffleWidth = 1;
+      while (shuffleWidth < effectiveWidth) shuffleWidth <<= 1;
+
+      for (int offset = shuffleWidth >> 1; offset >= 1; offset >>= 1) {
         auto shuf = builder.create<mlir::gpu::ShuffleOp>(
-            loc, val, offset, kWarpSize, mlir::gpu::ShuffleMode::XOR);
+            loc, val, offset, shuffleWidth, mlir::gpu::ShuffleMode::XOR);
         val = combineMax(val, shuf.getShuffleResult());
       }
 
-      auto tidIdx = builder.create<mlir::gpu::ThreadIdOp>(
-          loc, mlir::gpu::Dimension::x);
-      auto tid =
-          builder.create<mlir::arith::IndexCastOp>(loc, i32Ty, tidIdx);
-      auto c32 = builder.create<mlir::arith::ConstantIntOp>(loc, 32, i32Ty);
-      auto warpId = builder.create<mlir::arith::DivUIOp>(loc, tid, c32);
-      auto laneId = builder.create<mlir::arith::RemUIOp>(loc, tid, c32);
+      if (blockSize > kWarpSize) {
+        auto tidIdx = builder.create<mlir::gpu::ThreadIdOp>(
+            loc, mlir::gpu::Dimension::x);
+        auto tid =
+            builder.create<mlir::arith::IndexCastOp>(loc, i32Ty, tidIdx);
+        auto c32 = builder.create<mlir::arith::ConstantIntOp>(loc, 32, i32Ty);
+        auto warpId = builder.create<mlir::arith::DivUIOp>(loc, tid, c32);
+        auto laneId = builder.create<mlir::arith::RemUIOp>(loc, tid, c32);
 
-      mlir::Value storeVal =
-          isFloat ? val
-                  : (mlir::Value)builder.create<mlir::arith::BitcastOp>(
-                        loc, f32Ty, val);
-      auto warpIdIdx = builder.create<mlir::arith::IndexCastOp>(
-          loc, builder.getIndexType(), warpId);
-      builder.create<mlir::memref::StoreOp>(loc, storeVal, shmemArg,
-                                            mlir::ValueRange{warpIdIdx});
+        auto laneIsZero = builder.create<mlir::arith::CmpIOp>(
+            loc, mlir::arith::CmpIPredicate::eq, laneId,
+            builder.create<mlir::arith::ConstantIntOp>(loc, 0, i32Ty));
+        mlir::Value storeVal =
+            isFloat ? val
+                    : (mlir::Value)builder.create<mlir::arith::BitcastOp>(
+                          loc, f32Ty, val);
+        auto warpIdIdx = builder.create<mlir::arith::IndexCastOp>(
+            loc, builder.getIndexType(), warpId);
 
-      builder.create<mlir::gpu::BarrierOp>(loc);
+        auto &region = gpuFunc.getBody();
+        auto *storeThenBlock = new mlir::Block();
+        auto *storeMergeBlock = new mlir::Block();
+        region.push_back(storeThenBlock);
+        region.push_back(storeMergeBlock);
+        builder.create<mlir::cf::CondBranchOp>(loc, laneIsZero, storeThenBlock,
+                                               storeMergeBlock);
+        builder.setInsertionPointToStart(storeThenBlock);
+        builder.create<mlir::memref::StoreOp>(loc, storeVal, shmemArg,
+                                              mlir::ValueRange{warpIdIdx});
+        builder.create<mlir::cf::BranchOp>(loc, storeMergeBlock);
+        builder.setInsertionPointToStart(storeMergeBlock);
 
-      auto blockDimIdx = builder.create<mlir::gpu::BlockDimOp>(
-          loc, mlir::gpu::Dimension::x);
-      auto blockDim =
-          builder.create<mlir::arith::IndexCastOp>(loc, i32Ty, blockDimIdx);
-      auto numWarps = builder.create<mlir::arith::DivUIOp>(loc, blockDim, c32);
-      auto inBounds = builder.create<mlir::arith::CmpIOp>(
-          loc, mlir::arith::CmpIPredicate::ult, laneId, numWarps);
-      auto c0 = builder.create<mlir::arith::ConstantIntOp>(loc, 0, i32Ty);
-      auto safeLane = builder.create<mlir::arith::SelectOp>(loc, inBounds,
-                                                            laneId, c0);
-      auto safeLaneIdx = builder.create<mlir::arith::IndexCastOp>(
-          loc, builder.getIndexType(), safeLane);
-      auto loadedF32 = builder.create<mlir::memref::LoadOp>(
-          loc, shmemArg, mlir::ValueRange{safeLaneIdx});
-      mlir::Value loaded =
-          isFloat ? (mlir::Value)loadedF32
-                  : (mlir::Value)builder.create<mlir::arith::BitcastOp>(
-                        loc, i32Ty, loadedF32);
-      val = builder.create<mlir::arith::SelectOp>(loc, inBounds, loaded,
-                                                  identity);
+        builder.create<mlir::gpu::BarrierOp>(loc);
 
-      for (int offset : {1, 2, 4, 8, 16}) {
-        auto shuf = builder.create<mlir::gpu::ShuffleOp>(
-            loc, val, offset, kWarpSize, mlir::gpu::ShuffleMode::XOR);
-        val = combineMax(val, shuf.getShuffleResult());
+        int numWarpsStatic = (blockSize + kWarpSize - 1) / kWarpSize;
+        auto inBounds = builder.create<mlir::arith::CmpIOp>(
+            loc, mlir::arith::CmpIPredicate::ult, laneId,
+            builder.create<mlir::arith::ConstantIntOp>(loc, numWarpsStatic,
+                                                       i32Ty));
+        auto c0 = builder.create<mlir::arith::ConstantIntOp>(loc, 0, i32Ty);
+        auto safeLane = builder.create<mlir::arith::SelectOp>(loc, inBounds,
+                                                              laneId, c0);
+        auto safeLaneIdx = builder.create<mlir::arith::IndexCastOp>(
+            loc, builder.getIndexType(), safeLane);
+        auto loadedF32 = builder.create<mlir::memref::LoadOp>(
+            loc, shmemArg, mlir::ValueRange{safeLaneIdx});
+        mlir::Value loaded =
+            isFloat ? (mlir::Value)loadedF32
+                    : (mlir::Value)builder.create<mlir::arith::BitcastOp>(
+                          loc, i32Ty, loadedF32);
+        val = builder.create<mlir::arith::SelectOp>(loc, inBounds, loaded,
+                                                    identity);
+
+        int warpShuffleWidth = 1;
+        while (warpShuffleWidth < numWarpsStatic) warpShuffleWidth <<= 1;
+        for (int offset = warpShuffleWidth >> 1; offset >= 1; offset >>= 1) {
+          auto shuf = builder.create<mlir::gpu::ShuffleOp>(
+              loc, val, offset, warpShuffleWidth, mlir::gpu::ShuffleMode::XOR);
+          val = combineMax(val, shuf.getShuffleResult());
+        }
       }
 
       if (ty.isF16())

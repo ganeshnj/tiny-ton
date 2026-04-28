@@ -170,10 +170,11 @@ PYBIND11_MODULE(_tiny_ton_core, m) {
              return tinyton::compileModule(self.getModule(), opts);
            })
       .def("compile_to_nvptx",
-           [](tinyton::IRBuilder &self, const std::string &sm) {
-             return tinyton::compileToNVPTX(self.getModule(), sm);
+           [](tinyton::IRBuilder &self, const std::string &sm, int blockSize) {
+             return tinyton::compileToNVPTX(self.getModule(), sm, blockSize);
            },
-           py::arg("sm_version") = "sm_87");
+           py::arg("sm_version") = "sm_87",
+           py::arg("block_size") = 32);
 
   py::class_<tinyton::CompileResult>(m, "CompileResult")
       .def_readonly("success", &tinyton::CompileResult::success)

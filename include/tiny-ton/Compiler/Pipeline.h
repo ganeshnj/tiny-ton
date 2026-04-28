@@ -32,6 +32,7 @@ struct NVPTXCompileResult {
 };
 
 NVPTXCompileResult compileToNVPTX(mlir::ModuleOp module,
-                                  llvm::StringRef smVersion = "sm_87");
+                                  llvm::StringRef smVersion = "sm_87",
+                                  int blockSize = 32);
 
 } // namespace tinyton

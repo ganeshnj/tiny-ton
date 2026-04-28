@@ -221,6 +221,13 @@ class KernelVisitor(ast.NodeVisitor):
                 return self.builder.emit_mul(lhs, rhs)
             if isinstance(node.op, ast.Div):
                 return self.builder.emit_div(lhs, rhs)
+            if isinstance(node.op, ast.FloorDiv):
+                # Integer floor division: a // b → DivSIOp (positive ints)
+                return self.builder.emit_div(lhs, rhs)
+            if isinstance(node.op, ast.Mod):
+                # a % b → a - (a // b) * b  (synthesised from existing ops)
+                q = self.builder.emit_div(lhs, rhs)
+                return self.builder.emit_sub(lhs, self.builder.emit_mul(q, rhs))
             raise NotImplementedError(f"unsupported binop: {type(node.op)}")
 
         if isinstance(node, ast.Compare):

@@ -53,6 +53,13 @@ public:
                        ElementType elemType = ElementType::I32);
   void emitStore(mlir::Value addr, mlir::Value val, mlir::Value mask = {});
 
+  // Structured for loop: begin_for_range opens the body region,
+  // end_for_range closes it and yields values. Returns [iv, iter_arg*].
+  std::vector<mlir::Value> beginForRange(mlir::Value start, mlir::Value stop,
+                                         mlir::Value step,
+                                         std::vector<mlir::Value> initArgs);
+  std::vector<mlir::Value> endForRange(std::vector<mlir::Value> yieldValues);
+
   void emitBranchZero(mlir::Value cond, int64_t skip);
   void emitRet();
 

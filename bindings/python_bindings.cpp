@@ -155,6 +155,30 @@ PYBIND11_MODULE(_tiny_ton_core, m) {
              return PyValue{self.emitSharedLoad(idx.val, bufferSize, et)};
            },
            py::arg("idx"), py::arg("buffer_size"), py::arg("dtype") = "f32")
+      .def("begin_for_range",
+           [](tinyton::IRBuilder &self, PyValue start, PyValue stop,
+              PyValue step, const std::vector<PyValue> &initArgs) {
+             std::vector<mlir::Value> inits;
+             for (auto &pv : initArgs)
+               inits.push_back(pv.val);
+             auto results =
+                 self.beginForRange(start.val, stop.val, step.val, inits);
+             std::vector<PyValue> out;
+             for (auto v : results)
+               out.push_back(PyValue{v});
+             return out;
+           })
+      .def("end_for_range",
+           [](tinyton::IRBuilder &self, const std::vector<PyValue> &yieldVals) {
+             std::vector<mlir::Value> vals;
+             for (auto &pv : yieldVals)
+               vals.push_back(pv.val);
+             auto results = self.endForRange(vals);
+             std::vector<PyValue> out;
+             for (auto v : results)
+               out.push_back(PyValue{v});
+             return out;
+           })
       .def("emit_ret", [](tinyton::IRBuilder &self) { self.emitRet(); })
       .def("dump_mlir",
            [](tinyton::IRBuilder &self) {
@@ -201,7 +225,10 @@ PYBIND11_MODULE(_tiny_ton_core, m) {
       .def("set_args", &tinyton::SimulatedGPU::setArgs)
       .def("write_memory", &tinyton::SimulatedGPU::writeMemory)
       .def("read_memory", &tinyton::SimulatedGPU::readMemory)
-      .def("run", &tinyton::SimulatedGPU::run);
+      .def("run",
+           [](tinyton::SimulatedGPU &self, int gridX, int gridY,
+              int threadsPerBlock) { self.run(gridX, gridY, threadsPerBlock); },
+           py::arg("grid_x"), py::arg("grid_y"), py::arg("threads_per_block"));
 
 #ifdef TTN_ENABLE_CUDA
   m.def("has_cuda", [] { return tinyton::CUDARuntime::isAvailable(); });
@@ -231,13 +258,13 @@ PYBIND11_MODULE(_tiny_ton_core, m) {
            })
       .def("launch",
            [](tinyton::CUDARuntime &self, const std::string &ptx,
-              const std::string &kernelName, int gridX, int blockX,
+              const std::string &kernelName, int gridX, int gridY, int blockX,
               const std::vector<uintptr_t> &args) {
              std::vector<void *> voidArgs;
              voidArgs.reserve(args.size());
              for (auto a : args)
                voidArgs.push_back(reinterpret_cast<void *>(a));
-             self.launch(ptx, kernelName, gridX, blockX, voidArgs);
+             self.launch(ptx, kernelName, gridX, gridY, blockX, voidArgs);
            });
 #else
   m.def("has_cuda", [] { return false; });

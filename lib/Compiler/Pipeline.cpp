@@ -12,6 +12,7 @@
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -221,6 +222,8 @@ NVPTXCompileResult compileToNVPTX(mlir::ModuleOp srcModule,
   pm.enableVerifier(true);
 
   auto &gpuPM = pm.nest<mlir::gpu::GPUModuleOp>();
+  // Lower scf.for (from ForRangeOp) to structured control flow before LLVM.
+  gpuPM.addPass(mlir::createConvertSCFToCFPass());
   gpuPM.addPass(std::make_unique<CombinedGPULoweringPass>());
   gpuPM.addPass(mlir::createReconcileUnrealizedCastsPass());
 

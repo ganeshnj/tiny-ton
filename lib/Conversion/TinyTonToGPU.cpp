@@ -9,6 +9,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
@@ -98,6 +99,7 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule, int blockSize) {
   ctx->getOrLoadDialect<mlir::cf::ControlFlowDialect>();
   ctx->getOrLoadDialect<mlir::math::MathDialect>();
   ctx->getOrLoadDialect<mlir::memref::MemRefDialect>();
+  ctx->getOrLoadDialect<mlir::scf::SCFDialect>();
 
   auto i32Ty = mlir::IntegerType::get(ctx, 32);
   auto i1Ty = mlir::IntegerType::get(ctx, 1);
@@ -145,16 +147,18 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule, int blockSize) {
 
   bool hasReduceOps = false;
   int64_t userShmemSize = 0;
+  // Walk nested regions (e.g. ForRangeOp bodies) as well as top-level ops.
   for (auto *op : srcOps) {
-    if (llvm::isa<tinyton::ReduceSumOp, tinyton::ReduceMaxOp>(op)) {
-      hasReduceOps = true;
-    }
-    if (auto ssOp = llvm::dyn_cast<tinyton::SharedStoreOp>(op))
-      userShmemSize = std::max(userShmemSize,
-                               static_cast<int64_t>(ssOp.getBufferSize()));
-    if (auto slOp = llvm::dyn_cast<tinyton::SharedLoadOp>(op))
-      userShmemSize = std::max(userShmemSize,
-                               static_cast<int64_t>(slOp.getBufferSize()));
+    op->walk([&](mlir::Operation *inner) {
+      if (llvm::isa<tinyton::ReduceSumOp, tinyton::ReduceMaxOp>(inner))
+        hasReduceOps = true;
+      if (auto ssOp = llvm::dyn_cast<tinyton::SharedStoreOp>(inner))
+        userShmemSize = std::max(userShmemSize,
+                                 static_cast<int64_t>(ssOp.getBufferSize()));
+      if (auto slOp = llvm::dyn_cast<tinyton::SharedLoadOp>(inner))
+        userShmemSize = std::max(userShmemSize,
+                                 static_cast<int64_t>(slOp.getBufferSize()));
+    });
   }
 
   auto addrSpace = mlir::gpu::AddressSpaceAttr::get(
@@ -182,7 +186,9 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule, int blockSize) {
   mlir::IRMapping valueMap;
   llvm::DenseMap<mlir::Value, mlir::Type> pointerElementTypes;
 
-  for (auto *op : srcOps) {
+  // lowerOneOp is a std::function so it can recurse into ForRangeOp bodies.
+  std::function<void(mlir::Operation *)> lowerOneOp;
+  lowerOneOp = [&](mlir::Operation *op) {
     if (auto argOp = llvm::dyn_cast<tinyton::ArgOp>(op)) {
       auto kind = classifyArg(argOp.getIsPointer(), argOp.getElemType());
       auto blockArg = entryBlock->getArgument(argOp.getIndex());
@@ -705,13 +711,74 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule, int blockSize) {
         res = builder.create<mlir::arith::BitcastOp>(loc, resTy, loadedF32);
       valueMap.map(slOp.getResult(), res);
 
+    } else if (auto forOp = llvm::dyn_cast<tinyton::ForRangeOp>(op)) {
+      // Lower ForRangeOp to scf.for with iter_args.
+      auto start = valueMap.lookup(forOp.getStart());
+      auto stop  = valueMap.lookup(forOp.getStop());
+      auto step  = valueMap.lookup(forOp.getStep());
+
+      // scf.for uses index type for the loop bounds.
+      auto idxTy = builder.getIndexType();
+      auto startIdx = builder.create<mlir::arith::IndexCastOp>(loc, idxTy, start);
+      auto stopIdx  = builder.create<mlir::arith::IndexCastOp>(loc, idxTy, stop);
+      auto stepIdx  = builder.create<mlir::arith::IndexCastOp>(loc, idxTy, step);
+
+      llvm::SmallVector<mlir::Value> iterArgVals;
+      for (auto a : forOp.getInitArgs())
+        iterArgVals.push_back(valueMap.lookup(a));
+
+      auto scfFor = builder.create<mlir::scf::ForOp>(
+          loc, startIdx, stopIdx, stepIdx, iterArgVals);
+
+      // Save insertion point (currently after the scf.for in the parent block).
+      auto savedIP = builder.saveInsertionPoint();
+
+      // Move builder into the scf.for body block.
+      builder.setInsertionPointToStart(scfFor.getBody());
+
+      // Map the tinyton body block's induction variable (i32).
+      auto &tinBody = forOp.getBody().front();
+      auto iv = scfFor.getInductionVar();
+      auto ivI32 = builder.create<mlir::arith::IndexCastOp>(loc, i32Ty, iv);
+      valueMap.map(tinBody.getArgument(0), ivI32);
+
+      // Map iter_args block args.
+      for (unsigned i = 0; i < forOp.getInitArgs().size(); ++i)
+        valueMap.map(tinBody.getArgument(1 + i),
+                     scfFor.getRegionIterArgs()[i]);
+
+      // Recursively lower body ops.
+      for (auto &bodyOp : tinBody.getOperations()) {
+        if (auto yieldOp = llvm::dyn_cast<tinyton::YieldOp>(&bodyOp)) {
+          llvm::SmallVector<mlir::Value> yieldVals;
+          for (auto v : yieldOp.getValues())
+            yieldVals.push_back(valueMap.lookup(v));
+          builder.create<mlir::scf::YieldOp>(loc, yieldVals);
+        } else {
+          lowerOneOp(&bodyOp);
+        }
+      }
+
+      // Restore insertion point to after the scf.for.
+      builder.restoreInsertionPoint(savedIP);
+
+      // Map the ForRangeOp results to the scf.for results.
+      for (unsigned i = 0; i < forOp.getNumResults(); ++i)
+        valueMap.map(forOp.getResult(i), scfFor.getResult(i));
+
+    } else if (llvm::isa<tinyton::YieldOp>(op)) {
+      // YieldOp is handled inline inside the ForRangeOp body lowering above.
+
     } else if (llvm::isa<tinyton::RetOp>(op)) {
       builder.create<mlir::gpu::ReturnOp>(loc);
 
     } else if (llvm::isa<tinyton::BranchZeroOp>(op)) {
       // BranchZero is a simulator-only concept; skip for GPU path
     }
-  }
+  }; // end lowerOneOp lambda
+
+  for (auto *op : srcOps)
+    lowerOneOp(op);
 
   srcModule.getBody()->clear();
   srcModule.getBody()->getOperations().splice(

@@ -23,6 +23,7 @@ target_link_libraries(TinyTonCompiler
   MLIRFuncToLLVM
   MLIRLLVMCommonConversion
   MLIRReconcileUnrealizedCasts
+  MLIRSCFToControlFlow
   MLIRTransformUtils
   MLIRNVVMDialect
   MLIRBuiltinToLLVMIRTranslation

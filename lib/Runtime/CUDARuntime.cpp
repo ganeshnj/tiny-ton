@@ -52,7 +52,8 @@ void CUDARuntime::copyFromDevice(void *dst, const void *src, size_t bytes) {
 }
 
 void CUDARuntime::launch(const std::string &ptx,
-                         const std::string &kernelName, int gridX, int blockX,
+                         const std::string &kernelName, int gridX, int gridY,
+                         int blockX,
                          const std::vector<void *> &kernelArgs) {
   CUmodule cuModule;
   CUDA_CHECK(cuModuleLoadData(&cuModule, ptx.c_str()));
@@ -65,7 +66,7 @@ void CUDARuntime::launch(const std::string &ptx,
   for (size_t i = 0; i < argsCopy.size(); ++i)
     argPtrs[i] = &argsCopy[i];
 
-  CUDA_CHECK(cuLaunchKernel(cuFunc, gridX, 1, 1, blockX, 1, 1, 0, nullptr,
+  CUDA_CHECK(cuLaunchKernel(cuFunc, gridX, gridY, 1, blockX, 1, 1, 0, nullptr,
                             argPtrs.data(), nullptr));
 
   CUDA_CHECK(cuCtxSynchronize());

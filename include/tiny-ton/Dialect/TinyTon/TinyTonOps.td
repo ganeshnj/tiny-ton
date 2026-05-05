@@ -219,6 +219,21 @@ def TinyTon_SharedLoadOp : TinyTon_Op<"shared_load", []> {
   let assemblyFormat = "$idx `size` $bufferSize attr-dict `:` type($result)";
 }
 
+// --- Structured control flow -----------------------------------------------
+
+def TinyTon_ForRangeOp : TinyTon_Op<"for_range", []> {
+  let summary = "Structured for loop with runtime bounds and iteration arguments.";
+  let arguments = (ins I32:$start, I32:$stop, I32:$step,
+                       Variadic<AnyType>:$initArgs);
+  let results   = (outs Variadic<AnyType>:$results);
+  let regions   = (region SizedRegion<1>:$body);
+}
+
+def TinyTon_YieldOp : TinyTon_Op<"yield", [Terminator]> {
+  let summary = "Yield values from a for_range body.";
+  let arguments = (ins Variadic<AnyType>:$values);
+}
+
 // --- Control flow ----------------------------------------------------------
 
 def TinyTon_BranchZeroOp : TinyTon_Op<"bz", []> {

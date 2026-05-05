@@ -15,7 +15,7 @@ public:
   void setArgs(const std::vector<int32_t> &args);
   void writeMemory(int addr, const std::vector<int32_t> &data);
   std::vector<int32_t> readMemory(int addr, int count) const;
-  void run(int numBlocks, int threadsPerBlock);
+  void run(int gridX, int gridY, int threadsPerBlock);
 
 private:
   struct Impl;

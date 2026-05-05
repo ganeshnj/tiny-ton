@@ -44,7 +44,7 @@ static int runTestAdd(const std::string &emitMode) {
 
   tinyton::SimulatedGPU gpu;
   gpu.loadProgram(binary);
-  gpu.run(1, 1);
+  gpu.run(1, 1, 1);
 
   auto mem = gpu.readMemory(0, 1);
   std::cerr << "simulator: mem[0] = " << mem[0] << " (expected 8)\n";

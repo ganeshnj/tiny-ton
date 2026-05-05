@@ -152,9 +152,9 @@ Mirrors [Modular's Blackwell series](https://www.modular.com/blog/matrix-multipl
 - [x] Bug fix: `reduce_sum` partial-warp shuffle (`blockSize < 32`) — passes correct `width` to `gpu::ShuffleOp` instead of hardcoded 32
 - [x] Bug fix: `emit_mul` scalar promotion — `_promote_scalar` in `jit.py` prevents `TypeError` when a constexpr int is passed as an IR operand
 - [x] Benchmark notebook — `examples/gemm_benchmark.ipynb` with cuBLAS reference numbers and gap analysis
-- [ ] K0: Naive GEMM — add `//` (FloorDiv) and `%` (Mod) to JIT `BinOp` handler
-- [ ] K1: Row GEMM — rename/reframe `tiled_matmul_kernel` in notebook
-- [ ] K2: Shmem GEMM — `program_id(1)` (2D grid) + `scf.for` runtime K-loop
+- [x] K0: Naive GEMM — `//` (FloorDiv) and `%` (Mod) in JIT `BinOp` handler
+- [x] K1: Row GEMM — one block per output row, constexpr K-loop
+- [x] K2: Shmem GEMM — `program_id(1)` (2D grid) + `ForRangeOp` → `scf.for` runtime K-loop + shared memory tiling
 - [ ] K3: Swizzled GEMM — 128-byte XOR swizzle to eliminate shmem bank conflicts
 - [ ] K4: Vectorized GEMM — `LDG.128` vectorized loads
 - [ ] K5: Pipelined GEMM — `cp.async` to overlap load and compute

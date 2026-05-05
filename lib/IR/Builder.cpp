@@ -14,6 +14,10 @@ struct IRBuilder::Impl {
   std::unique_ptr<mlir::OpBuilder> builder;
   mlir::Block *block = nullptr;
 
+  // For nested for_range: saved insertion point and pending op.
+  mlir::OpBuilder::InsertPoint savedIP;
+  tinyton::ForRangeOp pendingForOp;
+
   Impl() {
     context.getOrLoadDialect<tinyton::TinyTonDialect>();
     module = mlir::ModuleOp::create(mlir::UnknownLoc::get(&context));
@@ -210,6 +214,54 @@ mlir::Value IRBuilder::emitLoad(mlir::Value addr, mlir::Value mask,
 void IRBuilder::emitStore(mlir::Value addr, mlir::Value val, mlir::Value mask) {
   auto loc = mlir::UnknownLoc::get(&impl_->context);
   impl_->builder->create<tinyton::StoreOp>(loc, addr, val, mask);
+}
+
+std::vector<mlir::Value>
+IRBuilder::beginForRange(mlir::Value start, mlir::Value stop, mlir::Value step,
+                         std::vector<mlir::Value> initArgs) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto i32Ty = impl_->builder->getI32Type();
+
+  llvm::SmallVector<mlir::Type> initTypes;
+  for (auto v : initArgs)
+    initTypes.push_back(v.getType());
+
+  // Save insertion point BEFORE creating the op (createBlock would move it).
+  impl_->savedIP = impl_->builder->saveInsertionPoint();
+
+  auto forOp = impl_->builder->create<tinyton::ForRangeOp>(
+      loc, initTypes, start, stop, step,
+      llvm::ArrayRef<mlir::Value>(initArgs));
+  impl_->pendingForOp = forOp;
+
+  // Create the body block: first arg is the induction variable (i32),
+  // followed by one block arg per iter_arg.
+  auto *body = impl_->builder->createBlock(&forOp.getBody());
+  body->addArgument(i32Ty, loc);
+  for (auto t : initTypes)
+    body->addArgument(t, loc);
+
+  impl_->builder->setInsertionPointToStart(body);
+
+  std::vector<mlir::Value> result;
+  for (auto &arg : body->getArguments())
+    result.push_back(arg);
+  return result;
+}
+
+std::vector<mlir::Value>
+IRBuilder::endForRange(std::vector<mlir::Value> yieldValues) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  impl_->builder->create<tinyton::YieldOp>(
+      loc, llvm::ArrayRef<mlir::Value>(yieldValues));
+
+  // Restore insertion point to after the ForRangeOp in the parent block.
+  impl_->builder->restoreInsertionPoint(impl_->savedIP);
+
+  std::vector<mlir::Value> results;
+  for (auto r : impl_->pendingForOp.getResults())
+    results.push_back(r);
+  return results;
 }
 
 void IRBuilder::emitBranchZero(mlir::Value cond, int64_t skip) {

@@ -94,13 +94,12 @@ class KernelVisitor(ast.NodeVisitor):
         self._eval(node.value)
 
     def visit_For(self, node: ast.For):
-        """Unroll ``for x in range(...)`` at compile time.
+        """Compile ``for x in range(...)`` to IR.
 
-        All range bounds must be Python literals or ``tt.constexpr``
-        parameters (i.e. values known when the kernel is compiled).  The
-        loop variable is stored as a Python int in ``symbols`` each
-        iteration; ``_eval`` promotes it to an IR constant whenever it
-        appears in an expression.
+        If all range bounds are Python literals or ``tt.constexpr`` parameters
+        the loop is unrolled at compile time (existing path).  If any bound is
+        a runtime IR value the loop is lowered to a ``ForRangeOp`` which maps
+        to ``scf.for`` on the GPU (CUDA path only).
         """
         assert isinstance(node.target, ast.Name), (
             "for loop target must be a simple name")
@@ -111,22 +110,83 @@ class KernelVisitor(ast.NodeVisitor):
             isinstance(iter_node, ast.Call)
             and isinstance(iter_node.func, ast.Name)
             and iter_node.func.id == "range"
-        ), "tiny-ton for loops must use range(...) with constexpr bounds"
+        ), "tiny-ton for loops must use range(...)"
 
-        raw = [self._eval_python_int(a) for a in iter_node.args]
-        if len(raw) == 1:
-            start, stop, step = 0, raw[0], 1
-        elif len(raw) == 2:
-            start, stop, step = raw[0], raw[1], 1
+        # --- Try compile-time unrolling first ---
+        try:
+            raw = [self._eval_python_int(a) for a in iter_node.args]
+            if len(raw) == 1:
+                start_i, stop_i, step_i = 0, raw[0], 1
+            elif len(raw) == 2:
+                start_i, stop_i, step_i = raw[0], raw[1], 1
+            else:
+                start_i, stop_i, step_i = raw[0], raw[1], raw[2]
+
+            for val in range(start_i, stop_i, step_i):
+                self.symbols[loop_var] = val  # Python int → IR const in _eval
+                for stmt in node.body:
+                    self.visit(stmt)
+            self.symbols.pop(loop_var, None)
+            return
+        except (AssertionError, NotImplementedError):
+            pass  # fall through to runtime loop path
+
+        # --- Runtime loop: emit ForRangeOp (CUDA path) ---
+        n = len(iter_node.args)
+        if n == 1:
+            start_pv = self.builder.emit_const(0)
+            stop_pv  = self._eval(iter_node.args[0])
+            step_pv  = self.builder.emit_const(1)
+        elif n == 2:
+            start_pv = self._eval(iter_node.args[0])
+            stop_pv  = self._eval(iter_node.args[1])
+            step_pv  = self.builder.emit_const(1)
         else:
-            start, stop, step = raw[0], raw[1], raw[2]
+            start_pv = self._eval(iter_node.args[0])
+            stop_pv  = self._eval(iter_node.args[1])
+            step_pv  = self._eval(iter_node.args[2])
 
-        for val in range(start, stop, step):
-            self.symbols[loop_var] = val  # Python int → IR const in _eval
-            for stmt in node.body:
-                self.visit(stmt)
+        # Discover iter_args: names assigned inside the loop body that already
+        # hold IR values (PyValues) in symbols before the loop.
+        iter_arg_names = self._find_loop_modified_names(node.body, loop_var)
+        init_pv = [self.symbols[n] for n in iter_arg_names]
 
+        # begin_for_range returns [iv_pv, iter_arg_0_pv, ...]
+        body_args = self.builder.begin_for_range(
+            start_pv, stop_pv, step_pv, init_pv)
+
+        self.symbols[loop_var] = body_args[0]  # induction variable
+        for name, arg in zip(iter_arg_names, body_args[1:]):
+            self.symbols[name] = arg
+
+        # Emit loop body
+        for stmt in node.body:
+            self.visit(stmt)
+
+        # end_for_range yields the updated iter_args and returns loop results
+        yield_pv = [self.symbols[n] for n in iter_arg_names]
+        results = self.builder.end_for_range(yield_pv)
+
+        for name, res in zip(iter_arg_names, results):
+            self.symbols[name] = res
         self.symbols.pop(loop_var, None)
+
+    def _find_loop_modified_names(self, body: list, loop_var: str) -> list:
+        """Return names of variables that are assigned in the loop body and
+        already exist as IR Values in symbols (these become iter_args)."""
+        modified = []
+        seen: set = set()
+        for stmt in body:
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.Assign):
+                    for target in node.targets:
+                        name = target.id if isinstance(target, ast.Name) else None
+                        if (name and name not in seen and name != loop_var
+                                and name in self.symbols
+                                and not isinstance(self.symbols[name], int)):
+                            modified.append(name)
+                            seen.add(name)
+        return modified
 
     def _eval_python_int(self, node: ast.expr) -> int:
         """Evaluate *node* as a Python integer at compile time.
@@ -334,18 +394,31 @@ class KernelVisitor(ast.NodeVisitor):
         if builtin == "shared_store":
             idx = self._eval(node.args[0])
             val = self._eval(node.args[1])
-            assert self.block_size is not None, \
+            buf_size = self._get_kwarg_int(node, "buffer_size", self.block_size)
+            assert buf_size is not None, \
                 "tt.arange must be called before tt.shared_store"
-            self.builder.emit_shared_store(idx, val, self.block_size)
+            self.builder.emit_shared_store(idx, val, buf_size)
             return None
         if builtin == "shared_load":
             idx = self._eval(node.args[0])
-            assert self.block_size is not None, \
+            buf_size = self._get_kwarg_int(node, "buffer_size", self.block_size)
+            assert buf_size is not None, \
                 "tt.arange must be called before tt.shared_load"
             return self.builder.emit_shared_load(
-                idx, self.block_size, self._kernel_dtype)
+                idx, buf_size, self._kernel_dtype)
 
         raise NotImplementedError(f"unsupported builtin: {builtin}")
+
+    def _get_kwarg_int(self, call_node: ast.Call, name: str,
+                       default=None):
+        """Return the integer value of a keyword argument, or *default*."""
+        for kw in call_node.keywords:
+            if kw.arg == name:
+                try:
+                    return self._eval_python_int(kw.value)
+                except (AssertionError, NotImplementedError):
+                    pass
+        return default
 
     @staticmethod
     def _resolve_builtin(func_node) -> Optional[str]:
@@ -500,7 +573,8 @@ class JITFunction:
 
         rt = core.CUDARuntime()
         block_size = compiled["block_size"]
-        num_blocks = grid[0] if grid else 1
+        num_blocks_x = grid[0] if len(grid) >= 1 else 1
+        num_blocks_y = grid[1] if len(grid) >= 2 else 1
 
         dev_ptrs = []
         array_mappings = []
@@ -520,7 +594,7 @@ class JITFunction:
 
         try:
             rt.launch(compiled["ptx"], compiled["kernel_name"],
-                      num_blocks, block_size, kernel_args)
+                      num_blocks_x, num_blocks_y, block_size, kernel_args)
 
             for dptr, nbytes, arr in array_mappings:
                 flat = np.empty(arr.size, dtype=arr.dtype)
@@ -535,7 +609,8 @@ class JITFunction:
 
         binary = compiled["binary"]
         block_size = compiled["block_size"]
-        num_blocks = grid[0] if grid else 1
+        num_blocks_x = grid[0] if len(grid) >= 1 else 1
+        num_blocks_y = grid[1] if len(grid) >= 2 else 1
         kernel_dtype = compiled.get("kernel_dtype", "i32")
 
         runtime_args = self._runtime_args(compiled, args)
@@ -547,6 +622,7 @@ class JITFunction:
 
         mem_words = max(total_elements + 1024, 4096)
         sim = core.SimulatedGPU(mem_words)
+        num_blocks = num_blocks_x * num_blocks_y  # kept for array sizing
 
         kernel_args = []
         next_addr = 0
@@ -574,7 +650,7 @@ class JITFunction:
 
         prog = [int(x) for x in binary]
         sim.load_program(prog)
-        sim.run(num_blocks, block_size)
+        sim.run(num_blocks_x, num_blocks_y, block_size)
 
         for base_addr, count, arr in array_mappings:
             result = sim.read_memory(base_addr, count)

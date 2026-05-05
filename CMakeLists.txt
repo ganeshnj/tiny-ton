@@ -11,7 +11,8 @@ find_package(LLVM REQUIRED CONFIG)
 # LLVM 18 from apt.llvm.org exports zstd::libzstd_shared but libzstd-dev may
 # not be installed.  Manually define the cmake target if the .so is present.
 if(NOT TARGET zstd::libzstd_shared)
-  find_library(ZSTD_LIB NAMES zstd)
+  find_library(ZSTD_LIB NAMES zstd zstd.so.1 libzstd.so.1.4.8
+               HINTS /usr/lib/aarch64-linux-gnu)
   if(ZSTD_LIB)
     add_library(zstd::libzstd_shared SHARED IMPORTED)
     set_target_properties(zstd::libzstd_shared PROPERTIES

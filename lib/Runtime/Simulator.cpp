@@ -131,10 +131,11 @@ std::vector<int32_t> SimulatedGPU::readMemory(int addr, int count) const {
   return result;
 }
 
-void SimulatedGPU::run(int numBlocks, int threadsPerBlock) {
+void SimulatedGPU::run(int gridX, int gridY, int threadsPerBlock) {
   auto &prog = impl_->program;
   auto &mem = impl_->memory;
   auto &args = impl_->kernelArgs;
+  int numBlocks = gridX * gridY;
 
   struct ThreadState {
     int32_t regs[16] = {};
@@ -222,7 +223,8 @@ void SimulatedGPU::run(int numBlocks, int threadsPerBlock) {
       ts.regs[rd] = args[imm];
       break;
     case 0xB:
-      ts.regs[rd] = blockId;
+      // PID axis=0 → column (x) index; axis=1 → row (y) index
+      ts.regs[rd] = (imm == 0) ? (blockId % gridX) : (blockId / gridX);
       break;
     case 0xC:
       ts.regs[rd] = threadId;

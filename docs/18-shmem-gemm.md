@@ -91,23 +91,33 @@ PTX
 
 ```python
 @tt.jit
-def shmem_gemm(A_ptr, B_ptr, C_ptr, M, N, K,
-               TM: tt.constexpr, TN: tt.constexpr, TK: tt.constexpr):
+def shmem_gemm(A_ptr, B_ptr, C_ptr, N, K,
+               BM: tt.constexpr, BN: tt.constexpr, BK: tt.constexpr):
+    # A is M×K, B is K×N, C is M×N
+    # Grid (M//BM, N//BN)  ·  BK threads/block
+    # Shmem: 2×BK floats (BK-wide A row slice + BK-wide B col slice)
     bm  = tt.program_id(0)
     bn  = tt.program_id(1)
-    tid = tt.arange(0, TK)
-    acc = 0.0
-    for k0 in range(0, K, TK):
-        a_val = tt.load(A_ptr + bm * TM * K + k0 + tid)
-        tt.shared_store(tid, a_val, buffer_size=2*TK)
-        b_val = tt.load(B_ptr + (k0 + tid) * N + bn * TN)
-        tt.shared_store(TK + tid, b_val, buffer_size=2*TK)
-        tt.sync()
-        a_sh = tt.shared_load(tid,      buffer_size=2*TK)
-        b_sh = tt.shared_load(TK + tid, buffer_size=2*TK)
-        acc  = acc + tt.reduce_sum(a_sh * b_sh)
-        tt.sync()
-    tt.store(C_ptr + bm * TM * N + bn * TN, acc)
+    tid = tt.arange(0, BK)
+
+    for tm in range(BM):        # constexpr — unrolled
+        for tn in range(BN):    # constexpr — unrolled
+            a_row = A_ptr + (bm * BM + tm) * K
+            b_col = B_ptr + (bn * BN + tn)
+            c_out = C_ptr + (bm * BM + tm) * N + (bn * BN + tn)
+
+            acc = 0.0
+            for k0 in range(0, K, BK):   # runtime scf.for
+                a_val = tt.load(a_row + k0 + tid)
+                tt.shared_store(tid, a_val, buffer_size=2*BK)
+                b_val = tt.load(b_col + (k0 + tid) * N)
+                tt.shared_store(BK + tid, b_val, buffer_size=2*BK)
+                tt.sync()
+                a_sh = tt.shared_load(tid,      buffer_size=2*BK)
+                b_sh = tt.shared_load(BK + tid, buffer_size=2*BK)
+                acc  = acc + tt.reduce_sum(a_sh * b_sh)
+                tt.sync()
+            tt.store(c_out, acc)
 ```
 
 ## Key result: compile time vs K1

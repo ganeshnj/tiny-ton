@@ -146,9 +146,15 @@ class KernelVisitor(ast.NodeVisitor):
             stop_pv  = self._eval(iter_node.args[1])
             step_pv  = self._eval(iter_node.args[2])
 
-        # Discover iter_args: names assigned inside the loop body that already
-        # hold IR values (PyValues) in symbols before the loop.
-        iter_arg_names = self._find_loop_modified_names(node.body, loop_var)
+        # Snapshot names that hold IR values *right now* — only these can be
+        # genuine loop-carried arguments.  Names created by earlier iterations
+        # of an outer constexpr-unrolled loop must not become iter_args here,
+        # because the SSA value that defines them won't dominate this loop's
+        # entry block.
+        pre_loop_ir_names = {k for k, v in self.symbols.items()
+                             if not isinstance(v, int)}
+        iter_arg_names = self._find_loop_modified_names(
+            node.body, loop_var, pre_loop_ir_names)
         init_pv = [self.symbols[n] for n in iter_arg_names]
 
         # begin_for_range returns [iv_pv, iter_arg_0_pv, ...]
@@ -171,9 +177,33 @@ class KernelVisitor(ast.NodeVisitor):
             self.symbols[name] = res
         self.symbols.pop(loop_var, None)
 
-    def _find_loop_modified_names(self, body: list, loop_var: str) -> list:
+        # Remove symbols that were created *inside* this loop body but were
+        # not pre-existing IR values.  Without this, a sibling loop (e.g. the
+        # next iteration of an outer constexpr-unrolled loop) would find them
+        # in `symbols`, include them as iter_args, and produce an SSA value
+        # that doesn't dominate the sibling loop's entry block.
+        for stmt in node.body:
+            for n_node in ast.walk(stmt):
+                if isinstance(n_node, ast.Assign):
+                    for target in n_node.targets:
+                        if isinstance(target, ast.Name):
+                            tname = target.id
+                            if tname not in pre_loop_ir_names and tname != loop_var:
+                                self.symbols.pop(tname, None)
+
+    def _find_loop_modified_names(self, body: list, loop_var: str,
+                                   pre_loop_ir_names: set | None = None) -> list:
         """Return names of variables that are assigned in the loop body and
-        already exist as IR Values in symbols (these become iter_args)."""
+        already exist as IR Values in symbols (these become iter_args).
+
+        ``pre_loop_ir_names`` — if provided, only names in this set are
+        considered.  Pass the snapshot taken just before the loop to avoid
+        including stale names left by earlier iterations of an outer
+        constexpr-unrolled loop (which would cause SSA dominance failures).
+        """
+        if pre_loop_ir_names is None:
+            pre_loop_ir_names = {k for k, v in self.symbols.items()
+                                 if not isinstance(v, int)}
         modified = []
         seen: set = set()
         for stmt in body:
@@ -182,8 +212,7 @@ class KernelVisitor(ast.NodeVisitor):
                     for target in node.targets:
                         name = target.id if isinstance(target, ast.Name) else None
                         if (name and name not in seen and name != loop_var
-                                and name in self.symbols
-                                and not isinstance(self.symbols[name], int)):
+                                and name in pre_loop_ir_names):
                             modified.append(name)
                             seen.add(name)
         return modified

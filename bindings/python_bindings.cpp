@@ -81,6 +81,18 @@ PYBIND11_MODULE(_tiny_ton_core, m) {
            [](tinyton::IRBuilder &self, PyValue lhs, PyValue rhs) {
              return PyValue{self.emitCmpLt(lhs.val, rhs.val)};
            })
+      .def("emit_bit_xor",
+           [](tinyton::IRBuilder &self, PyValue lhs, PyValue rhs) {
+             return PyValue{self.emitBitXor(lhs.val, rhs.val)};
+           })
+      .def("emit_bit_and",
+           [](tinyton::IRBuilder &self, PyValue lhs, PyValue rhs) {
+             return PyValue{self.emitBitAnd(lhs.val, rhs.val)};
+           })
+      .def("emit_bit_shr",
+           [](tinyton::IRBuilder &self, PyValue val, PyValue amount) {
+             return PyValue{self.emitBitShr(val.val, amount.val)};
+           })
       .def("emit_exp",
            [](tinyton::IRBuilder &self, PyValue v) {
              return PyValue{self.emitExp(v.val)};

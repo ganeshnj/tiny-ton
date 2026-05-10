@@ -125,6 +125,31 @@ def TinyTon_CmpLtOp : TinyTon_Op<"cmp_lt",
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs)";
 }
 
+// --- Bitwise integer ops ---------------------------------------------------
+
+def TinyTon_BitXorOp : TinyTon_Op<"bit_xor",
+    [Pure, Commutative, AllTypesMatch<["lhs", "rhs", "result"]>]> {
+  let summary = "Bitwise XOR on i32.";
+  let arguments = (ins I32:$lhs, I32:$rhs);
+  let results   = (outs I32:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+}
+
+def TinyTon_BitAndOp : TinyTon_Op<"bit_and",
+    [Pure, Commutative, AllTypesMatch<["lhs", "rhs", "result"]>]> {
+  let summary = "Bitwise AND on i32.";
+  let arguments = (ins I32:$lhs, I32:$rhs);
+  let results   = (outs I32:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict";
+}
+
+def TinyTon_BitShrOp : TinyTon_Op<"bit_shr", [Pure]> {
+  let summary = "Logical (unsigned) right-shift on i32.";
+  let arguments = (ins I32:$val, I32:$amount);
+  let results   = (outs I32:$result);
+  let assemblyFormat = "$val `,` $amount attr-dict";
+}
+
 // --- Constants -------------------------------------------------------------
 
 def TinyTon_ConstOp : TinyTon_Op<"const", [Pure]> {

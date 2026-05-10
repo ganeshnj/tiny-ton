@@ -305,6 +305,24 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule, int blockSize) {
         valueMap.map(cmpOp.getResult(), ext);
       }
 
+    } else if (auto xorOp = llvm::dyn_cast<tinyton::BitXorOp>(op)) {
+      auto lhs = valueMap.lookup(xorOp.getLhs());
+      auto rhs = valueMap.lookup(xorOp.getRhs());
+      valueMap.map(xorOp.getResult(),
+          builder.create<mlir::arith::XOrIOp>(loc, lhs, rhs).getResult());
+
+    } else if (auto andOp = llvm::dyn_cast<tinyton::BitAndOp>(op)) {
+      auto lhs = valueMap.lookup(andOp.getLhs());
+      auto rhs = valueMap.lookup(andOp.getRhs());
+      valueMap.map(andOp.getResult(),
+          builder.create<mlir::arith::AndIOp>(loc, lhs, rhs).getResult());
+
+    } else if (auto shrOp = llvm::dyn_cast<tinyton::BitShrOp>(op)) {
+      auto val    = valueMap.lookup(shrOp.getVal());
+      auto amount = valueMap.lookup(shrOp.getAmount());
+      valueMap.map(shrOp.getResult(),
+          builder.create<mlir::arith::ShRUIOp>(loc, val, amount).getResult());
+
     } else if (auto expOp = llvm::dyn_cast<tinyton::ExpOp>(op)) {
       auto operand = valueMap.lookup(expOp.getOperand());
       auto ty = operand.getType();

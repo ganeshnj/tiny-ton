@@ -33,6 +33,10 @@ public:
   mlir::Value emitDiv(mlir::Value lhs, mlir::Value rhs);
   mlir::Value emitCmpLt(mlir::Value lhs, mlir::Value rhs);
 
+  mlir::Value emitBitXor(mlir::Value lhs, mlir::Value rhs);
+  mlir::Value emitBitAnd(mlir::Value lhs, mlir::Value rhs);
+  mlir::Value emitBitShr(mlir::Value val, mlir::Value amount);
+
   mlir::Value emitExp(mlir::Value operand);
   mlir::Value emitLog(mlir::Value operand);
   mlir::Value emitSqrt(mlir::Value operand);

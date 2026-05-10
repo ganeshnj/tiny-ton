@@ -130,6 +130,27 @@ mlir::Value IRBuilder::emitCmpLt(mlir::Value lhs, mlir::Value rhs) {
       .getResult();
 }
 
+mlir::Value IRBuilder::emitBitXor(mlir::Value lhs, mlir::Value rhs) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto i32Ty = impl_->builder->getI32Type();
+  return impl_->builder->create<tinyton::BitXorOp>(loc, i32Ty, lhs, rhs)
+      .getResult();
+}
+
+mlir::Value IRBuilder::emitBitAnd(mlir::Value lhs, mlir::Value rhs) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto i32Ty = impl_->builder->getI32Type();
+  return impl_->builder->create<tinyton::BitAndOp>(loc, i32Ty, lhs, rhs)
+      .getResult();
+}
+
+mlir::Value IRBuilder::emitBitShr(mlir::Value val, mlir::Value amount) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto i32Ty = impl_->builder->getI32Type();
+  return impl_->builder->create<tinyton::BitShrOp>(loc, i32Ty, val, amount)
+      .getResult();
+}
+
 mlir::Value IRBuilder::emitExp(mlir::Value operand) {
   auto loc = mlir::UnknownLoc::get(&impl_->context);
   auto ty = operand.getType();

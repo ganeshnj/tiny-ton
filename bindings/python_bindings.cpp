@@ -140,6 +140,12 @@ PYBIND11_MODULE(_tiny_ton_core, m) {
            py::arg("addr"), py::arg("mask") = py::none(),
            py::arg("other") = py::none(),
            py::arg("dtype") = "i32")
+      .def("emit_load_vec4",
+           [](tinyton::IRBuilder &self, PyValue addr) {
+             auto vs = self.emitLoadVec4(addr.val);
+             return std::vector<PyValue>{
+                 {vs[0]}, {vs[1]}, {vs[2]}, {vs[3]}};
+           })
       .def("emit_store",
            [](tinyton::IRBuilder &self, PyValue addr, PyValue val,
               py::object mask) {

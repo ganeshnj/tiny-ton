@@ -232,6 +232,14 @@ mlir::Value IRBuilder::emitLoad(mlir::Value addr, mlir::Value mask,
       .getResult();
 }
 
+std::array<mlir::Value, 4> IRBuilder::emitLoadVec4(mlir::Value addr) {
+  auto loc = mlir::UnknownLoc::get(&impl_->context);
+  auto f32Ty = impl_->builder->getF32Type();
+  auto op = impl_->builder->create<tinyton::LoadVec4Op>(
+      loc, mlir::TypeRange{f32Ty, f32Ty, f32Ty, f32Ty}, addr);
+  return {op.getR0(), op.getR1(), op.getR2(), op.getR3()};
+}
+
 void IRBuilder::emitStore(mlir::Value addr, mlir::Value val, mlir::Value mask) {
   auto loc = mlir::UnknownLoc::get(&impl_->context);
   impl_->builder->create<tinyton::StoreOp>(loc, addr, val, mask);

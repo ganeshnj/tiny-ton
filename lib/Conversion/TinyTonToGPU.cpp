@@ -670,6 +670,20 @@ GPULoweringResult lowerToGPU(mlir::ModuleOp srcModule, int blockSize) {
         valueMap.map(loadOp.getResult(), loaded);
       }
 
+    } else if (auto lv4Op = llvm::dyn_cast<tinyton::LoadVec4Op>(op)) {
+      auto addr = valueMap.lookup(lv4Op.getAddr());
+
+      auto f32Ty = mlir::Float32Type::get(ctx);
+      auto vec4Ty = mlir::VectorType::get({4}, f32Ty);
+
+      auto loaded = builder.create<mlir::LLVM::LoadOp>(loc, vec4Ty, addr);
+      for (int i = 0; i < 4; ++i) {
+        auto idx = builder.create<mlir::arith::ConstantIntOp>(loc, i, i32Ty);
+        auto elem =
+            builder.create<mlir::LLVM::ExtractElementOp>(loc, loaded, idx);
+        valueMap.map(lv4Op.getResult(i), elem);
+      }
+
     } else if (auto storeOp = llvm::dyn_cast<tinyton::StoreOp>(op)) {
       auto addr = valueMap.lookup(storeOp.getAddr());
       auto val = valueMap.lookup(storeOp.getValue());

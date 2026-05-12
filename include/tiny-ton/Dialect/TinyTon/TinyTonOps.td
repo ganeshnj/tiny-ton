@@ -212,6 +212,12 @@ def TinyTon_LoadOp : TinyTon_Op<"load",
   let assemblyFormat = "$addr (`,` $mask^)? (`other` $other^ `:` type($other))? attr-dict `:` type($result)";
 }
 
+def TinyTon_LoadVec4Op : TinyTon_Op<"load_vec4", []> {
+  let summary = "128-bit vectorized global load — returns 4 consecutive f32 values.";
+  let arguments = (ins I32:$addr);
+  let results   = (outs F32:$r0, F32:$r1, F32:$r2, F32:$r3);
+}
+
 def TinyTon_StoreOp : TinyTon_Op<"store", []> {
   let summary = "Store a value to data memory.";
   let arguments = (ins I32:$addr, TinyTon_ScalarType:$value, Optional<I32>:$mask);

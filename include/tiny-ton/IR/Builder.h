@@ -6,6 +6,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Value.h"
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -55,6 +56,7 @@ public:
   mlir::Value emitLoad(mlir::Value addr, mlir::Value mask = {},
                        mlir::Value other = {},
                        ElementType elemType = ElementType::I32);
+  std::array<mlir::Value, 4> emitLoadVec4(mlir::Value addr);
   void emitStore(mlir::Value addr, mlir::Value val, mlir::Value mask = {});
 
   // Structured for loop: begin_for_range opens the body region,

@@ -11,7 +11,7 @@ from typing import Any, Optional
 import numpy as np
 
 
-_BUILTINS = {"program_id", "arange", "load", "store",
+_BUILTINS = {"program_id", "arange", "load", "load4", "store",
              "exp", "log", "sqrt", "rsqrt", "abs", "max", "relu",
              "reduce_sum", "reduce_max",
              "sync", "shared_store", "shared_load"}
@@ -81,8 +81,19 @@ class KernelVisitor(ast.NodeVisitor):
         value = self._eval(node.value)
         assert len(node.targets) == 1
         target = node.targets[0]
-        assert isinstance(target, ast.Name)
-        self.symbols[target.id] = value
+        if isinstance(target, ast.Tuple):
+            assert isinstance(value, (list, tuple)), (
+                f"tuple-unpack requires a list/tuple value, got {type(value)}")
+            elts = target.elts
+            assert len(elts) == len(value), (
+                f"tuple-unpack length mismatch: {len(elts)} targets vs "
+                f"{len(value)} values")
+            for elt, v in zip(elts, value):
+                assert isinstance(elt, ast.Name)
+                self.symbols[elt.id] = v
+        else:
+            assert isinstance(target, ast.Name)
+            self.symbols[target.id] = value
 
     def visit_AnnAssign(self, node: ast.AnnAssign):
         assert node.value is not None, "annotation-only statements not supported"
@@ -388,6 +399,10 @@ class KernelVisitor(ast.NodeVisitor):
             other = self._get_kwarg(node, "other")
             return self.builder.emit_load(addr, mask=mask, other=other,
                                           dtype=self._kernel_dtype)
+
+        if builtin == "load4":
+            addr = self._eval(node.args[0])
+            return self.builder.emit_load_vec4(addr)
 
         if builtin == "store":
             addr = self._eval(node.args[0])
